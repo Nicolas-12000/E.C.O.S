@@ -1,0 +1,50 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from app.core.config import settings
+from app.core.logging import setup_logging
+
+setup_logging(settings.debug)
+
+# Importa el router correspondiente según el entorno
+if settings.env == "production":
+    from app.api.router_prod import api_router
+else:
+    from app.api.router import api_router
+
+app = FastAPI(
+    title="ECOS API",
+    description="Early Control and Observation System — API de alerta temprana epidemiológica",
+    version="0.3.0",
+    debug=settings.debug,
+)
+
+# CORS — permite que el frontend Next.js se conecte
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.resolved_cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(api_router)
+
+
+@app.get("/")
+def root():
+    return {
+        "name": "ECOS API",
+        "version": "0.3.0",
+        "status": "ok",
+        "docs": "/docs",
+        "endpoints": [
+            "/health",
+            "/api/v3/predict",
+            "/api/v3/history",
+            "/api/v3/signals",
+            "/api/v3/chat",
+            "/api/v3/alerts",
+            "/api/v3/endemic",
+        ],
+    }
