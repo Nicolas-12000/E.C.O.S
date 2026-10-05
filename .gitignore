@@ -105,3 +105,6 @@ Desktop.ini
 # Editors
 .vscode/
 .idea/
+
+# Local execution plan (not part of the GitHub repo)
+docs/plan.md
