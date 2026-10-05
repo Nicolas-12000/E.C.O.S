@@ -14,6 +14,7 @@ import pandas as pd
 import psycopg
 from psycopg.rows import dict_row
 
+from app.core.config import settings
 from app.core.db import get_db_connection
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,58 @@ def classify_endemic_risk(cases_total: float, endemic_channel: dict) -> str:
     return "low"
 
 
+def reload_curated_cache() -> None:
+    """Clear in-process cache after a new Supabase load or pipeline run."""
+    _load_df.cache_clear()
+
+
+def _load_df_from_supabase() -> pd.DataFrame:
+    query = """
+        SELECT
+            epi_year, epi_week, week_start_date, week_end_date, month_num,
+            departamento_code, municipio_code, event_code, disease, cases_total,
+            temp_avg_c, temp_min_c, temp_max_c, precipitation_mm,
+            temp_avg_c_actual, temp_min_c_actual, temp_max_c_actual, precipitation_mm_actual,
+            vaccination_coverage_pct, rips_visits_total,
+            mobility_in, mobility_out, mobility_index,
+            trends_score, rss_mentions, signals_score
+        FROM public.fact_core_weekly
+    """
+    with get_db_connection() as conn:
+        df = pd.read_sql(query, conn)
+    df["week_start_date"] = pd.to_datetime(df["week_start_date"], errors="coerce")
+    df["cases_total"] = pd.to_numeric(df["cases_total"], errors="coerce").fillna(0).astype(int)
+    logger.info("Loaded curated dataset from Supabase fact_core_weekly (%s rows)", len(df))
+    return df
+
+
+def get_data_as_of() -> dict | None:
+    """Latest observed epidemiological week in the curated dataset."""
+    try:
+        df = _load_df()
+    except FileNotFoundError:
+        return None
+    if df.empty or df["week_start_date"].isna().all():
+        return None
+    row = df.loc[df["week_start_date"].idxmax()]
+    as_of = row["week_start_date"]
+    return {
+        "epi_year": int(row["epi_year"]),
+        "epi_week": int(row["epi_week"]),
+        "week_start_date": as_of.date() if hasattr(as_of, "date") else as_of,
+    }
+
+
 @lru_cache(maxsize=1)
 def _load_df() -> pd.DataFrame:
     """Carga el dataset curado una vez y lo cachea en memoria."""
+    db_url = settings.resolved_database_url()
+    if db_url:
+        try:
+            return _load_df_from_supabase()
+        except Exception as exc:
+            logger.warning("Supabase fact_core_weekly unavailable (%s), falling back to files", exc)
+
     for parquet, csv_dir in [
         (_PARQUET_FRESH, _CSV_FRESH),
         (_PARQUET_MAIN, _CSV_MAIN),
