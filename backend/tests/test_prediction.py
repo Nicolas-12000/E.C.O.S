@@ -30,7 +30,7 @@ class _FakeModel:
         return 0.0
 
 
-def test_predict_cases_is_recursive(monkeypatch):
+def test_predict_cases_uses_anchor_not_recursive_lags(monkeypatch):
     history = pd.DataFrame(
         [
             {"week_start_date": date(2026, 4, 6), "cases_total": 3},
@@ -72,5 +72,7 @@ def test_predict_cases_is_recursive(monkeypatch):
 
     results = prediction.predict_cases("05001", "dengue", weeks_ahead=2)
 
-    assert [item["predicted_cases"] for item in results] == [13.0, 23.0]
+    assert [item["predicted_cases"] for item in results] == [13.0, 13.0]
     assert [item["week_start_date"] for item in results] == [date(2026, 4, 6), date(2026, 4, 13)]
+    assert results[0]["horizon_weeks"] == 1
+    assert results[1]["horizon_weeks"] == 2
