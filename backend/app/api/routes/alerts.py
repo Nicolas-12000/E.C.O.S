@@ -105,13 +105,22 @@ def alerts(
 
     stale = _is_stale(as_of_date)
     served = get_served_model_name()
-    rows = fetch_run_alerts(
-        run["run_id"],
-        disease=disease,
-        horizon_weeks=horizon_weeks,
-        model_family=served,
-        limit=limit,
-    )
+    try:
+        rows = fetch_run_alerts(
+            run["run_id"],
+            disease=disease,
+            horizon_weeks=horizon_weeks,
+            model_family=served,
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.warning("Forecast alerts query failed, falling back to historic: %s", exc)
+        payload = _observed_alerts(disease, limit)
+        payload["message"] = (
+            "No se pudo leer prediction_points (¿aplicaste la migración 0003?). "
+            f"Detalle: {exc}"
+        )
+        return payload
 
     alert_list = []
     for row in rows:
