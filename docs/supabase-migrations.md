@@ -12,6 +12,8 @@ Los datos operativos ya cargados (`fact_core_weekly`, dimensiones, etc.) **no se
 | `supabase/migrations/0001_add_predictions_table.sql` | Tabla legacy `public.predictions` (chat, API `/predictions`) | Hechos opcional |
 | `supabase/migrations/0002_prediction_runs.sql` | `prediction_runs` + `prediction_points` (corrida semanal) | `dim_municipios` recomendado (JOIN nombres) |
 | `supabase/migrations/0003_prediction_model_family.sql` | Columna `model_family` (naive/ridge/hybrid) | 0002 |
+| `supabase/migrations/0004_fact_core_climate_anomaly.sql` | Columnas anomalía clima + humedad en `fact_core_weekly` | init_02 |
+| `supabase/migrations/0005_whatif_scenarios.sql` | Tabla `whatif_scenarios` (simulaciones guardadas) | — |
 
 Si la base **ya existe** en Supabase (tu caso), aplica solo lo que falte:
 
