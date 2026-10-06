@@ -6,6 +6,7 @@ from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Query
 
 from app.services.epidemiology import VALID_DISEASES, OUTBREAK_THRESHOLD, _load_df, get_data_as_of
+from app.services.model_registry import get_served_model_name
 from app.services.prediction_store import fetch_run_alerts, get_latest_run
 
 logger = logging.getLogger(__name__)
@@ -103,7 +104,14 @@ def alerts(
         as_of_date = as_of_date.date()
 
     stale = _is_stale(as_of_date)
-    rows = fetch_run_alerts(run["run_id"], disease=disease, horizon_weeks=horizon_weeks, limit=limit)
+    served = get_served_model_name()
+    rows = fetch_run_alerts(
+        run["run_id"],
+        disease=disease,
+        horizon_weeks=horizon_weeks,
+        model_family=served,
+        limit=limit,
+    )
 
     alert_list = []
     for row in rows:
@@ -132,6 +140,7 @@ def alerts(
         "title": title,
         "run_id": str(run["run_id"]),
         "model_name": run["model_name"],
+        "served_model": served,
         "as_of_epi_year": run["as_of_epi_year"],
         "as_of_epi_week": run["as_of_epi_week"],
         "as_of_week_start_date": str(as_of_date),
