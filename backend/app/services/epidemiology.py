@@ -15,6 +15,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.core.config import settings
+from app.services.signals_join import attach_department_signals
 from app.core.db import get_db_connection
 
 logger = logging.getLogger(__name__)
@@ -101,23 +102,12 @@ def reload_curated_cache() -> None:
 
 
 def _load_df_from_supabase() -> pd.DataFrame:
-    query = """
-        SELECT
-            epi_year, epi_week, week_start_date, week_end_date, month_num,
-            departamento_code, municipio_code, event_code, disease, cases_total,
-            temp_avg_c, temp_min_c, temp_max_c, precipitation_mm,
-            temp_avg_c_actual, temp_min_c_actual, temp_max_c_actual, precipitation_mm_actual,
-            vaccination_coverage_pct, rips_visits_total,
-            mobility_in, mobility_out, mobility_index,
-            trends_score, rss_mentions, signals_score
-        FROM public.fact_core_weekly
-    """
     with get_db_connection() as conn:
-        df = pd.read_sql(query, conn)
+        df = pd.read_sql("SELECT * FROM public.fact_core_weekly", conn)
     df["week_start_date"] = pd.to_datetime(df["week_start_date"], errors="coerce")
     df["cases_total"] = pd.to_numeric(df["cases_total"], errors="coerce").fillna(0).astype(int)
     logger.info("Loaded curated dataset from Supabase fact_core_weekly (%s rows)", len(df))
-    return df
+    return attach_department_signals(df)
 
 
 def get_data_as_of() -> dict | None:
@@ -157,7 +147,7 @@ def _load_df() -> pd.DataFrame:
             df = pd.read_parquet(parquet)
             df["week_start_date"] = pd.to_datetime(df["week_start_date"], errors="coerce")
             df["cases_total"] = pd.to_numeric(df["cases_total"], errors="coerce").fillna(0).astype(int)
-            return df
+            return attach_department_signals(df)
         if csv_dir.exists():
             csv_files = sorted(csv_dir.glob("*.csv"))
             if csv_files:
@@ -165,7 +155,7 @@ def _load_df() -> pd.DataFrame:
                 df = pd.concat([pd.read_csv(f) for f in csv_files], ignore_index=True)
                 df["week_start_date"] = pd.to_datetime(df["week_start_date"], errors="coerce")
                 df["cases_total"] = pd.to_numeric(df["cases_total"], errors="coerce").fillna(0).astype(int)
-                return df
+                return attach_department_signals(df)
     raise FileNotFoundError("Curated dataset not found. Run curate_weekly_spark.py first.")
 
 

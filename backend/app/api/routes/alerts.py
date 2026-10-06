@@ -5,7 +5,13 @@ from datetime import date, datetime, timedelta
 
 from fastapi import APIRouter, Query
 
-from app.services.epidemiology import VALID_DISEASES, OUTBREAK_THRESHOLD, _load_df, get_data_as_of
+from app.services.epidemiology import (
+    VALID_DISEASES,
+    OUTBREAK_THRESHOLD,
+    _load_df,
+    calculate_endemic_channel,
+    classify_endemic_risk,
+)
 from app.services.model_registry import get_served_model_name
 from app.services.prediction_store import fetch_run_alerts, get_latest_run
 
@@ -38,37 +44,39 @@ def _observed_alerts(disease: str | None, limit: int) -> dict:
             return {"mode": "historic", "alerts": [], "message": f"disease must be one of {sorted(VALID_DISEASES)}"}
         recent = recent[recent["disease"] == disease]
 
-    recent = recent[recent["cases_total"] >= OUTBREAK_THRESHOLD]
-    recent = recent.sort_values("cases_total", ascending=False).head(limit)
-
-    as_of_row = recent.iloc[0] if not recent.empty else df.loc[df["week_start_date"] == latest_date].iloc[0]
+    as_of_row = df.loc[df["week_start_date"] == latest_date].iloc[0]
     as_of_date = latest_date.date() if hasattr(latest_date, "date") else latest_date
 
     alert_list = []
     for _, row in recent.iterrows():
         cases = int(row["cases_total"])
+        muni = str(row["municipio_code"])
+        dis = str(row["disease"])
+        epi_week = int(row["epi_week"])
+        channel = calculate_endemic_channel(muni, dis, epi_week)
+        threshold = channel.get("p90") or channel.get("p75") or OUTBREAK_THRESHOLD
+        if cases < threshold:
+            continue
+        risk_level = classify_endemic_risk(cases, channel)
         alert_list.append({
-            "municipio_code": row["municipio_code"],
+            "municipio_code": muni,
             "municipio_name": None,
             "departamento_code": str(row.get("departamento_code", "")),
-            "disease": row["disease"],
+            "disease": dis,
             "epi_year": int(row["epi_year"]),
-            "epi_week": int(row["epi_week"]),
+            "epi_week": epi_week,
             "cases_total": cases,
             "predicted_cases": None,
             "horizon_weeks": None,
-            "outbreak_threshold": OUTBREAK_THRESHOLD,
-            "risk_level": (
-                "critical" if cases >= OUTBREAK_THRESHOLD * 3
-                else "high" if cases >= OUTBREAK_THRESHOLD * 2
-                else "moderate"
-            ),
+            "outbreak_threshold": threshold,
+            "risk_level": risk_level,
             "signals": {
                 "trends_score": round(float(row.get("trends_score", 0) or 0), 2),
                 "rss_mentions": int(float(row.get("rss_mentions", 0) or 0)),
                 "signals_score": round(float(row.get("signals_score", 0) or 0), 3),
             },
         })
+    alert_list = sorted(alert_list, key=lambda x: x["cases_total"], reverse=True)[:limit]
 
     stale = _is_stale(as_of_date)
     return {
@@ -81,7 +89,8 @@ def _observed_alerts(disease: str | None, limit: int) -> dict:
         "alerts": alert_list,
         "total": len(alert_list),
         "latest_week": str(as_of_date),
-        "outbreak_threshold": OUTBREAK_THRESHOLD,
+        "outbreak_threshold": None,
+        "threshold_mode": "endemic_p90",
         "disease_filter": disease,
     }
 
