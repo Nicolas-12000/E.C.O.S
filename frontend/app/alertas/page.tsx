@@ -33,6 +33,7 @@ interface AlertsResponse {
   as_of_epi_year?: number
   as_of_epi_week?: number
   model_name?: string
+  served_model?: string
   horizon_weeks?: number
   alerts: AlertItem[]
   total: number
@@ -134,9 +135,13 @@ export default function AlertasPage() {
         </div>
         <div className="bg-(--color-surface) border border-(--color-border) rounded-md p-4">
           <p className="text-[10px] uppercase tracking-wider text-(--color-muted) font-semibold">Modelo</p>
-          <p className="text-sm font-bold text-(--color-primary) mt-2">{data?.model_name ?? "—"}</p>
+          <p className="text-sm font-bold text-(--color-primary) mt-2">
+            {data?.served_model ?? data?.model_name ?? "—"}
+          </p>
           <p className="text-xs text-(--color-muted) mt-1">
-            {isForecast ? `Horizonte +${horizon} sem` : "Sin corrida semanal"}
+            {isForecast
+              ? `Horizonte +${horizon} sem · run ${data?.model_name ?? ""}`.trim()
+              : "Sin corrida semanal"}
           </p>
         </div>
       </div>
@@ -155,9 +160,10 @@ export default function AlertasPage() {
           <div className="min-h-50 flex flex-col items-center justify-center gap-2 text-sm text-(--color-secondary)">
             <Badge variant="outline">Sin datos</Badge>
             <p>
-              {isForecast
-                ? "No hay municipios por encima del umbral en este horizonte. Ejecuta el job semanal si aún no hay corrida."
-                : "No hay alertas para el filtro actual."}
+              {data?.message ??
+                (isForecast
+                  ? "No hay municipios por encima del umbral en este horizonte. Ejecuta el job semanal si aún no hay corrida."
+                  : "No hay alertas para el filtro actual.")}
             </p>
           </div>
         ) : (
