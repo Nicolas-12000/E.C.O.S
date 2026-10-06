@@ -11,6 +11,7 @@ Los datos operativos ya cargados (`fact_core_weekly`, dimensiones, etc.) **no se
 | `scripts/supabase_init_03.sql` | RAG / señales RSS | Part 1 |
 | `supabase/migrations/0001_add_predictions_table.sql` | Tabla legacy `public.predictions` (chat, API `/predictions`) | Hechos opcional |
 | `supabase/migrations/0002_prediction_runs.sql` | `prediction_runs` + `prediction_points` (corrida semanal) | `dim_municipios` recomendado (JOIN nombres) |
+| `supabase/migrations/0003_prediction_model_family.sql` | Columna `model_family` (naive/ridge/hybrid) | 0002 |
 
 Si la base **ya existe** en Supabase (tu caso), aplica solo lo que falte:
 
