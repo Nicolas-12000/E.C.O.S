@@ -106,7 +106,7 @@ def fit_prophet_series(df_series: pd.DataFrame):
     
     model = Prophet(
         yearly_seasonality=True,
-        weekly_seasonality=True,
+        weekly_seasonality=False,
         daily_seasonality=False,
         holidays=colombia_holidays,
         interval_width=0.9,

@@ -35,16 +35,16 @@ class EcosHybridModel:
         
         return pred, shap_dict
 
-    def get_prophet_baseline(self, municipio_code: str, disease: str, ds: pd.Timestamp) -> float:
-        """Gets the Prophet baseline for a specific series and date."""
+    def get_prophet_baseline(self, municipio_code: str, disease: str, ds: pd.Timestamp) -> float | None:
+        """Prophet baseline when a series model exists; otherwise None (no zero fill)."""
         key = f"{municipio_code}:{disease}"
         if key not in self.prophet_models:
-            return 0.0
-            
+            return None
+
         model = self.prophet_models[key]
         frame = pd.DataFrame({"ds": [ds]})
         try:
             forecast = model.predict(frame)
             return float(forecast["yhat"].iloc[0])
         except Exception:
-            return 0.0
+            return None
