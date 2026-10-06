@@ -4,6 +4,7 @@ Architecture notes, decisions, and user docs.
 
 Key docs:
 - supabase-migrations.md: Migration order, prediction_runs schema, weekly job.
+- PLAN_PROGRESS.md: Completion tracker vs execution/data/polish plans.
 - api.md: API usage and base endpoints.
 - data-schema.md: Data sources and curated schema.
 - data-lineage.md: Lineage overview for curated datasets.
