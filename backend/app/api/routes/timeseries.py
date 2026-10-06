@@ -2,6 +2,7 @@ from fastapi import APIRouter, Query, HTTPException
 from app.schemas.epidemiology import TimeseriesResponse, HistoryItem, PredictionItem
 from app.services.epidemiology import get_history, VALID_DISEASES
 from app.services.prediction import predict_cases
+from app.services.model_registry import get_served_model_name
 
 router = APIRouter()
 
@@ -40,5 +41,6 @@ def get_timeseries(
         municipio_code=municipio_code,
         disease=disease,
         history=history_records,
-        predictions=[PredictionItem(**p) for p in predictions_raw]
+        predictions=[PredictionItem(**p) for p in predictions_raw],
+        served_model=get_served_model_name(),
     )

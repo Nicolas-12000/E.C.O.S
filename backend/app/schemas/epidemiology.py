@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel
@@ -194,14 +194,36 @@ class WhatIfRequest(BaseModel):
     disease: str
     weeks_ahead: int = 4
     adjustments: dict[str, float]  # e.g. {"vaccination_coverage_pct": +10.0}
+    save_scenario: bool = False
+    notes: Optional[str] = None
+
 
 class WhatIfResponse(BaseModel):
     original_predictions: list[PredictionItem]
     adjusted_predictions: list[PredictionItem]
     delta_total: float
+    scenario_id: Optional[str] = None
+
+
+class WhatIfScenarioItem(BaseModel):
+    scenario_id: str
+    created_at: datetime
+    municipio_code: str
+    disease: str
+    weeks_ahead: int
+    adjustments: dict[str, float]
+    delta_total: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class WhatIfScenarioListResponse(BaseModel):
+    scenarios: list[WhatIfScenarioItem]
+    total: int
+
 
 class TimeseriesResponse(BaseModel):
     municipio_code: str
     disease: str
     history: list[HistoryItem]
     predictions: list[PredictionItem]
+    served_model: Optional[str] = None
