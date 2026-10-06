@@ -855,7 +855,9 @@ def enrich_and_write(
     out_parquet: str,
     out_csv_prefix: str,
     merge_medellin_mobility: bool = False,
+    embed_signals_in_gold: bool = False,
 ):
+    silver_signal_exports: list[tuple[str, object]] = []
     climate_muni, climate_dept, climate_region = climate
     
     # Cachear sivigila ya que se usa como base
@@ -1081,20 +1083,35 @@ def enrich_and_write(
 
         if dept_non_null:
             trends_df = signals_trends.filter(F.col("departamento_code").isNotNull())
-            core_df = core_df.join(
-                trends_df,
-                on=["departamento_code", "epi_year", "epi_week", "disease"],
-                how="left",
-            )
+            trend_cols = [
+                c
+                for c in [
+                    "departamento_code",
+                    "epi_year",
+                    "epi_week",
+                    "week_start_date",
+                    "disease",
+                    "trends_score",
+                ]
+                if c in trends_df.columns
+            ]
+            silver_signal_exports.append(("silver_signals_trends_dept", trends_df.select(*trend_cols)))
+            if embed_signals_in_gold:
+                core_df = core_df.join(
+                    trends_df,
+                    on=["departamento_code", "epi_year", "epi_week", "disease"],
+                    how="left",
+                )
         else:
             trends_df = signals_trends
             if "departamento_code" in trends_df.columns:
                 trends_df = trends_df.drop("departamento_code")
-            core_df = core_df.join(
-                trends_df,
-                on=["epi_year", "epi_week", "disease"],
-                how="left",
-            )
+            if embed_signals_in_gold:
+                core_df = core_df.join(
+                    trends_df,
+                    on=["epi_year", "epi_week", "disease"],
+                    how="left",
+                )
 
     if signals_rss is not None:
         if "departamento_code" in signals_rss.columns:
@@ -1104,20 +1121,34 @@ def enrich_and_write(
 
         if dept_non_null:
             rss_df = signals_rss.filter(F.col("departamento_code").isNotNull()).drop("week_start_date")
-            core_df = core_df.join(
-                rss_df,
-                on=["departamento_code", "epi_year", "epi_week", "disease"],
-                how="left",
-            )
+            rss_cols = [
+                c
+                for c in [
+                    "departamento_code",
+                    "epi_year",
+                    "epi_week",
+                    "disease",
+                    "rss_mentions",
+                ]
+                if c in rss_df.columns
+            ]
+            silver_signal_exports.append(("silver_signals_rss_dept", rss_df.select(*rss_cols)))
+            if embed_signals_in_gold:
+                core_df = core_df.join(
+                    rss_df,
+                    on=["departamento_code", "epi_year", "epi_week", "disease"],
+                    how="left",
+                )
         else:
             rss_df = signals_rss.drop("week_start_date")
             if "departamento_code" in rss_df.columns:
                 rss_df = rss_df.drop("departamento_code")
-            core_df = core_df.join(
-                rss_df,
-                on=["epi_year", "epi_week", "disease"],
-                how="left",
-            )
+            if embed_signals_in_gold:
+                core_df = core_df.join(
+                    rss_df,
+                    on=["epi_year", "epi_week", "disease"],
+                    how="left",
+                )
 
 
 
@@ -1133,9 +1164,6 @@ def enrich_and_write(
     core_df = ensure_column(core_df, "mobility_in", "double")
     core_df = ensure_column(core_df, "mobility_out", "double")
     core_df = ensure_column(core_df, "mobility_index", "double")
-    core_df = ensure_column(core_df, "trends_score", "double")
-    core_df = ensure_column(core_df, "rss_mentions", "double")
-    core_df = ensure_column(core_df, "signals_score", "double")
 
     core_df = core_df.withColumn(
         "mobility_index",
@@ -1143,18 +1171,38 @@ def enrich_and_write(
         .otherwise((F.coalesce(F.col("mobility_in"), F.lit(0.0)) + F.coalesce(F.col("mobility_out"), F.lit(0.0))).cast("double")),
     )
 
+    signal_feature_cols = []
+    if embed_signals_in_gold:
+        core_df = ensure_column(core_df, "trends_score", "double")
+        core_df = ensure_column(core_df, "rss_mentions", "double")
+        core_df = ensure_column(core_df, "signals_score", "double")
+        core_df = core_df.withColumn(
+            "signals_score",
+            F.when(
+                F.col("trends_score").isNull() & F.col("rss_mentions").isNull(),
+                F.lit(None),
+            ).otherwise(
+                (F.coalesce(F.col("trends_score"), F.lit(0.0)) * F.lit(0.7)
+                 + F.coalesce(F.col("rss_mentions"), F.lit(0.0)) * F.lit(0.3)).cast("double")
+            ),
+        )
+        signal_feature_cols = ["trends_score", "rss_mentions", "signals_score"]
+
     core_df = core_df.withColumn(
-        "signals_score",
+        "temp_avg_c_anomaly",
         F.when(
-            F.col("trends_score").isNull() & F.col("rss_mentions").isNull(),
-            F.lit(None),
-        ).otherwise(
-            (F.coalesce(F.col("trends_score"), F.lit(0.0)) * F.lit(0.7)
-             + F.coalesce(F.col("rss_mentions"), F.lit(0.0)) * F.lit(0.3)).cast("double")
-        ),
+            F.col("temp_avg_c_actual").isNotNull() & F.col("temp_avg_c").isNotNull(),
+            F.col("temp_avg_c_actual") - F.col("temp_avg_c"),
+        ).otherwise(F.lit(None)),
     )
-
-
+    core_df = core_df.withColumn(
+        "precipitation_mm_anomaly",
+        F.when(
+            F.col("precipitation_mm_actual").isNotNull() & F.col("precipitation_mm").isNotNull(),
+            F.col("precipitation_mm_actual") - F.col("precipitation_mm"),
+        ).otherwise(F.lit(None)),
+    )
+    core_df = ensure_column(core_df, "humidity_avg_pct_actual", "double")
 
     event_code = (
         F.when(F.col("disease") == "dengue", F.lit(CANONICAL_EVENT["dengue"][0]))
@@ -1184,14 +1232,15 @@ def enrich_and_write(
             "temp_min_c_actual",
             "temp_max_c_actual",
             "precipitation_mm_actual",
+            "humidity_avg_pct_actual",
+            "temp_avg_c_anomaly",
+            "precipitation_mm_anomaly",
             "vaccination_coverage_pct",
             "rips_visits_total",
             "mobility_in",
             "mobility_out",
             "mobility_index",
-            "trends_score",
-            "rss_mentions",
-            "signals_score",
+            *signal_feature_cols,
         )
     )
 
@@ -1216,14 +1265,23 @@ def enrich_and_write(
             F.avg("temp_min_c_actual").alias("temp_min_c_actual"),
             F.avg("temp_max_c_actual").alias("temp_max_c_actual"),
             F.avg("precipitation_mm_actual").alias("precipitation_mm_actual"),
+            F.avg("humidity_avg_pct_actual").alias("humidity_avg_pct_actual"),
+            F.avg("temp_avg_c_anomaly").alias("temp_avg_c_anomaly"),
+            F.avg("precipitation_mm_anomaly").alias("precipitation_mm_anomaly"),
             F.avg("vaccination_coverage_pct").alias("vaccination_coverage_pct"),
             F.avg("rips_visits_total").alias("rips_visits_total"),
             F.avg("mobility_in").alias("mobility_in"),
             F.avg("mobility_out").alias("mobility_out"),
             F.avg("mobility_index").alias("mobility_index"),
-            F.avg("trends_score").alias("trends_score"),
-            F.avg("rss_mentions").alias("rss_mentions"),
-            F.avg("signals_score").alias("signals_score"),
+            *(
+                [
+                    F.avg("trends_score").alias("trends_score"),
+                    F.avg("rss_mentions").alias("rss_mentions"),
+                    F.avg("signals_score").alias("signals_score"),
+                ]
+                if embed_signals_in_gold
+                else []
+            ),
         )
         .select(
             "epi_year",
@@ -1244,15 +1302,31 @@ def enrich_and_write(
             "temp_min_c_actual",
             "temp_max_c_actual",
             "precipitation_mm_actual",
+            "humidity_avg_pct_actual",
+            "temp_avg_c_anomaly",
+            "precipitation_mm_anomaly",
             "vaccination_coverage_pct",
             "rips_visits_total",
             "mobility_in",
             "mobility_out",
             "mobility_index",
-            "trends_score",
-            "rss_mentions",
-            "signals_score",
+            *signal_feature_cols,
         )
+    )
+
+    case_only_cols = [
+        "epi_year",
+        "epi_week",
+        "week_start_date",
+        "week_end_date",
+        "departamento_code",
+        "municipio_code",
+        "event_code",
+        "disease",
+        "cases_total",
+    ]
+    fact_cases_weekly = fact_core_weekly.select(
+        *[c for c in case_only_cols if c in fact_core_weekly.columns]
     )
 
     log_feature_coverage(
@@ -1271,9 +1345,7 @@ def enrich_and_write(
             "mobility_in",
             "mobility_out",
             "mobility_index",
-            "trends_score",
-            "rss_mentions",
-            "signals_score",
+            *signal_feature_cols,
         ],
     )
 
@@ -1307,15 +1379,23 @@ def enrich_and_write(
     clear_output_path(f"{out_csv_prefix}_dim_departamentos")
     clear_output_path(f"{out_csv_prefix}_dim_municipios")
     clear_output_path(f"{out_csv_prefix}_fact_core_weekly")
+    clear_output_path(f"{out_csv_prefix}_fact_cases_weekly")
     clear_output_path(f"{out_csv_prefix}_fact_climate_monthly")
     clear_output_path(f"{out_csv_prefix}_fact_avg_cases_annual")
     clear_output_path(f"{out_csv_prefix}_fact_vaccination_annual")
+
+    for suffix, sdf in silver_signal_exports:
+        out_path = f"{out_csv_prefix}_{suffix}"
+        clear_output_path(out_path)
+        sdf.coalesce(1).write.mode("overwrite").option("header", True).csv(out_path)
+        print(f"[info] Silver export: {out_path}")
     
     fact_core_weekly.write.mode("overwrite").parquet(out_parquet)
     
     dim_departamentos.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{out_csv_prefix}_dim_departamentos")
     dim_municipios.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{out_csv_prefix}_dim_municipios")
     fact_core_weekly.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{out_csv_prefix}_fact_core_weekly")
+    fact_cases_weekly.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{out_csv_prefix}_fact_cases_weekly")
     fact_climate.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{out_csv_prefix}_fact_climate_monthly")
     fact_avg_cases.coalesce(1).write.mode("overwrite").option("header", True).csv(f"{out_csv_prefix}_fact_avg_cases_annual")
 
@@ -1375,6 +1455,11 @@ def main() -> int:
         "--merge-medellin-mobility",
         action="store_true",
         help="UNION Medellín terminal with nacional mobility (default: keep separate)",
+    )
+    parser.add_argument(
+        "--embed-signals-in-gold",
+        action="store_true",
+        help="Join Trends/RSS into fact_core_weekly (default: silver dept exports only)",
     )
     args = parser.parse_args()
 
@@ -1439,6 +1524,7 @@ def main() -> int:
         out_parquet,
         out_csv.replace(".csv", ""),
         merge_medellin_mobility=args.merge_medellin_mobility,
+        embed_signals_in_gold=args.embed_signals_in_gold,
     )
 
     count = sivigila.count()
