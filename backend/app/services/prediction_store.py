@@ -80,13 +80,13 @@ def insert_points(run_id: uuid.UUID, rows: list[dict[str, Any]]) -> int:
     sql = """
         INSERT INTO public.prediction_points (
             run_id, municipio_code, departamento_code, disease, horizon_weeks,
-            epi_year, epi_week, week_start_date, predicted_cases,
+            model_family, epi_year, epi_week, week_start_date, predicted_cases,
             outbreak_flag, outbreak_threshold, endemic_risk, shap_top_factors
         )
         VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
-        ON CONFLICT (run_id, municipio_code, disease, horizon_weeks)
+        ON CONFLICT (run_id, municipio_code, disease, horizon_weeks, model_family)
         DO UPDATE SET
             predicted_cases = EXCLUDED.predicted_cases,
             outbreak_flag = EXCLUDED.outbreak_flag,
@@ -110,6 +110,7 @@ def insert_points(run_id: uuid.UUID, rows: list[dict[str, Any]]) -> int:
                         row.get("departamento_code"),
                         row["disease"],
                         int(row["horizon_weeks"]),
+                        row.get("model_family", "hybrid"),
                         int(row["epi_year"]),
                         int(row["epi_week"]),
                         row.get("week_start_date"),
@@ -129,10 +130,14 @@ def fetch_run_alerts(
     run_id: uuid.UUID,
     disease: str | None = None,
     horizon_weeks: int = 1,
+    model_family: str | None = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
     filters = ["p.run_id = %s", "p.horizon_weeks = %s", "p.outbreak_flag = TRUE"]
     params: list[Any] = [run_id, horizon_weeks]
+    if model_family:
+        filters.append("p.model_family = %s")
+        params.append(model_family)
     if disease:
         filters.append("p.disease = %s")
         params.append(disease)
@@ -162,19 +167,21 @@ def fetch_run_alerts(
             return [dict(r) for r in cur.fetchall()]
 
 
-def sync_legacy_predictions_table(run_id: uuid.UUID, horizon_weeks: int = 1) -> None:
+def sync_legacy_predictions_table(
+    run_id: uuid.UUID, horizon_weeks: int = 1, model_family: str = "hybrid"
+) -> None:
     """Mirror horizon-1 points into public.predictions for chat/RAG compatibility."""
     query = """
         SELECT municipio_code, departamento_code, disease, epi_year, epi_week,
                week_start_date, predicted_cases, outbreak_flag, outbreak_threshold,
                endemic_risk, shap_top_factors
         FROM public.prediction_points
-        WHERE run_id = %s AND horizon_weeks = %s
+        WHERE run_id = %s AND horizon_weeks = %s AND model_family = %s
     """
     try:
         with get_db_connection() as conn:
             with conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(query, (run_id, horizon_weeks))
+                cur.execute(query, (run_id, horizon_weeks, model_family))
                 rows = cur.fetchall()
                 if not rows:
                     return

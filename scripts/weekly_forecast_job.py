@@ -23,6 +23,7 @@ if str(BACKEND_ROOT) not in sys.path:
 load_dotenv(REPO_ROOT / ".env")
 
 from app.services.epidemiology import get_data_as_of, reload_curated_cache, VALID_DISEASES
+from app.services.model_registry import get_served_model_name
 from app.services.prediction import predict_cases
 from app.services.prediction_store import (
     create_run,
@@ -101,8 +102,9 @@ def main() -> int:
         print("[error] no targets in Supabase")
         return 1
 
+    served = get_served_model_name()
     run_id = create_run(
-        model_name=args.model_name,
+        model_name=f"{args.model_name}:{served}",
         as_of_epi_year=as_of["epi_year"],
         as_of_epi_week=as_of["epi_week"],
         as_of_week_start_date=as_of["week_start_date"],
@@ -111,20 +113,26 @@ def main() -> int:
     print(f"[info] run_id={run_id}")
 
     all_points: list[dict] = []
-    for municipio_code, disease in targets:
-        try:
-            preds = predict_cases(municipio_code, disease, weeks_ahead=args.weeks_ahead)
-        except Exception as exc:
-            print(f"[warn] skip {municipio_code}/{disease}: {exc}")
-            continue
-        all_points.extend(preds)
+    for family in ("naive", "ridge", "hybrid"):
+        for municipio_code, disease in targets:
+            try:
+                preds = predict_cases(
+                    municipio_code,
+                    disease,
+                    weeks_ahead=args.weeks_ahead,
+                    model_family=family,
+                )
+            except Exception as exc:
+                print(f"[warn] skip {family} {municipio_code}/{disease}: {exc}")
+                continue
+            all_points.extend(preds)
 
     if not all_points:
         print("[error] no predictions generated")
         return 1
 
     inserted = insert_points(run_id, all_points)
-    sync_legacy_predictions_table(run_id, horizon_weeks=1)
+    sync_legacy_predictions_table(run_id, horizon_weeks=1, model_family=served)
     print(f"[ok] stored {inserted} prediction points (run {run_id})")
     prev = get_latest_run()
     if prev:
