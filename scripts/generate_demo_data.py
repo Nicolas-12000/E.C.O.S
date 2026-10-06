@@ -2,7 +2,7 @@
 """Generate synthetic demo data so the backend can run without the full Spark pipeline.
 
 Creates:
-  - data/processed/curated_weekly_csv/  (CSV files)
+  - data/demo/curated_weekly_csv/  (CSV files, isolated from production gold)
   - models/final_model.joblib           (trained XGBoost model)
 
 Usage:
@@ -19,7 +19,7 @@ import pandas as pd
 from xgboost import XGBRegressor
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_CSV = REPO_ROOT / "data" / "processed" / "curated_weekly_csv"
+OUTPUT_CSV = REPO_ROOT / "data" / "demo" / "curated_weekly_csv"
 MODEL_OUT = REPO_ROOT / "models" / "final_model.joblib"
 
 # ── Representative municipalities (code, depto_code, name) ─────────────────
