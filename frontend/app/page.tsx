@@ -23,10 +23,10 @@ const MODULES = [
   },
   {
     icon: ShieldAlert,
-    title: "Predicción Híbrida",
-    description: "Prophet (estacionalidad) + XGBoost (variables exógenas) con explicabilidad SHAP. Cada predicción muestra por qué el modelo alerta.",
-    href: "/dashboard",
-    tag: "ML MODEL",
+    title: "Alertas y pronóstico",
+    description: "Corridas semanales guardadas en Supabase: naive, Ridge o híbrido según métricas, con horizonte 1–4 semanas desde el último corte observado.",
+    href: "/alertas",
+    tag: "FORECAST",
   },
   {
     icon: Map,
