@@ -44,6 +44,13 @@
       "output": "data/raw/movilidad_nacional_eh75-8ah6.csv"
     },
     {
+      "key": "rips_agregado",
+      "name": "RIPS vista agregada (atenciones por diagnostico)",
+      "type": "socrata",
+      "id": "5e6c-5p2c",
+      "output": "data/raw/rips_5e6c-5p2c.csv"
+    },
+    {
       "key": "movilidad_medellin_terminal",
       "name": "Movilidad Medellin - Terminal de Transportes",
       "type": "socrata",

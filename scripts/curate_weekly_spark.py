@@ -854,6 +854,7 @@ def enrich_and_write(
     features: set[str],
     out_parquet: str,
     out_csv_prefix: str,
+    merge_medellin_mobility: bool = False,
 ):
     climate_muni, climate_dept, climate_region = climate
     
@@ -994,14 +995,15 @@ def enrich_and_write(
     if mobility is not None:
         mobility_joined = mobility
 
-        if mobility_medellin is not None:
+        if merge_medellin_mobility and mobility_medellin is not None:
             med_joined = (
                  mobility_medellin.join(muni_map.select("municipio_norm", "municipio_code"), on="municipio_norm", how="left")
                 .filter(F.col("municipio_code").isNotNull())
                 .select("municipio_code", "epi_year", "epi_week", "week_start_date", "mobility_in", "mobility_out")
             )
-            # normalize Medellín flows to `municipio_code` and include in the combined mobility dataset
             mobility_joined = mobility_joined.unionByName(med_joined, allowMissingColumns=True)
+        elif mobility_medellin is not None and not merge_medellin_mobility:
+            print("[info] mobility: Medellín terminal kept separate (no UNION with nacional)")
 
         # aggregate combined mobility (national + medellin if present)
         # aggregate combined mobility (preserve week_start_date when available)
@@ -1193,14 +1195,19 @@ def enrich_and_write(
         )
     )
 
-    # Deduplicate: group by key columns and aggregate with sensible defaults to ensure unique primary keys
     dedup_keys = ["epi_year", "epi_week", "departamento_code", "municipio_code", "event_code", "disease"]
+    dup_count = (
+        fact_core_weekly.groupBy(*dedup_keys).count().filter(F.col("count") > 1).count()
+    )
+    if dup_count > 0:
+        print(f"[warn] {dup_count} duplicate gold keys before export; aggregating with first() (not sum) on cases")
+
     fact_core_weekly = (
         fact_core_weekly.groupBy(*dedup_keys)
         .agg(
             F.first("week_start_date").alias("week_start_date"),
             F.first("week_end_date").alias("week_end_date"),
-            F.sum("cases_total").alias("cases_total"),
+            F.first("cases_total").alias("cases_total"),
             F.avg("temp_avg_c").alias("temp_avg_c"),
             F.avg("temp_min_c").alias("temp_min_c"),
             F.avg("temp_max_c").alias("temp_max_c"),
@@ -1364,6 +1371,11 @@ def main() -> int:
     parser.add_argument("--out-parquet")
     parser.add_argument("--out-csv")
     parser.add_argument("--period", default="1991-2020")
+    parser.add_argument(
+        "--merge-medellin-mobility",
+        action="store_true",
+        help="UNION Medellín terminal with nacional mobility (default: keep separate)",
+    )
     args = parser.parse_args()
 
     version = args.version.lower()
@@ -1425,7 +1437,8 @@ def main() -> int:
         version,
         features,
         out_parquet,
-        out_csv.replace(".csv", ""), # Usar como prefijo
+        out_csv.replace(".csv", ""),
+        merge_medellin_mobility=args.merge_medellin_mobility,
     )
 
     count = sivigila.count()
