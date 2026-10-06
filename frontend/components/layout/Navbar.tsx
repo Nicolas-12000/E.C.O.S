@@ -3,13 +3,15 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { useState } from "react"
-import { Activity, Menu, X, TrendingUp, Newspaper, BarChart3, Scale, ShieldAlert } from "lucide-react"
+import { Activity, Menu, X, TrendingUp, Newspaper, BarChart3, Scale, ShieldAlert, LineChart, FlaskConical } from "lucide-react"
 
 const NAV_LINKS = [
   { href: "/", label: "Inicio", icon: Activity },
   { href: "/tendencias", label: "Tendencias", icon: TrendingUp },
   { href: "/noticias", label: "Noticias", icon: Newspaper },
   { href: "/alertas", label: "Alertas", icon: ShieldAlert },
+  { href: "/pronostico", label: "Pronóstico", icon: LineChart },
+  { href: "/whatif", label: "What-if", icon: FlaskConical },
   { href: "/dashboard", label: "Dashboard", icon: BarChart3 },
   { href: "/anova", label: "ANOVA", icon: Scale },
 ]
