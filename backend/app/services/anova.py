@@ -27,7 +27,7 @@ def run_dengue_anova(
             query = ""
             params = (years,)
 
-            if table_name == "fact_core_weekly":
+            if table_name in ("fact_core_weekly", "silver_sivigila_weekly"):
                 query = """
                     SELECT epi_year as year, epi_week as week, SUM(cases_total) as cases
                     FROM public.fact_core_weekly

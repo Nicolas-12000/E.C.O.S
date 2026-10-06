@@ -28,7 +28,11 @@ const YEAR_COLORS: Record<string, string> = {
   "5": "#0891B2", // Cyan
 }
 
-type TableType = "fact_core_weekly" | "dengue_kaggle_dataset" | "anova_dataset"
+type TableType =
+  | "silver_sivigila_weekly"
+  | "fact_core_weekly"
+  | "dengue_kaggle_dataset"
+  | "anova_dataset"
 type DiseaseType = "dengue" | "zika" | "malaria" | "chikungunya"
 
 interface DescriptiveStats {
@@ -95,7 +99,7 @@ interface AnovaResponseData {
 }
 
 export default function AnovaPage() {
-  const [tables, setTables] = useState<TableType[]>(["fact_core_weekly"])
+  const [tables, setTables] = useState<TableType[]>(["silver_sivigila_weekly"])
   const [disease, setDisease] = useState<DiseaseType>("dengue")
   const [selectedYears, setSelectedYears] = useState<number[]>([2015, 2016, 2017, 2019])
   const [transform, setTransform] = useState<boolean>(false)
@@ -154,12 +158,13 @@ export default function AnovaPage() {
     setDisease(newDisease)
     if (newDisease !== "dengue") {
       // For other diseases, only fact_core_weekly is allowed
-      setTables(["fact_core_weekly"])
+      setTables(["silver_sivigila_weekly"])
     }
   }
 
   const handleTableToggle = (tableId: TableType) => {
-    if (disease !== "dengue" && tableId !== "fact_core_weekly") return
+    const sivigilaTables: TableType[] = ["silver_sivigila_weekly", "fact_core_weekly"]
+    if (disease !== "dengue" && !sivigilaTables.includes(tableId)) return
 
     if (tables.includes(tableId)) {
       if (tables.length > 1) {
@@ -476,7 +481,8 @@ export default function AnovaPage() {
                 </label>
                 <div className="flex flex-col gap-2">
                   {[
-                    { id: "fact_core_weekly", label: "fact_core_weekly (ECOS)", available: true },
+                    { id: "silver_sivigila_weekly", label: "silver_sivigila_weekly (SIVIGILA)", available: true },
+                    { id: "fact_core_weekly", label: "fact_core_weekly (legacy wide)", available: true },
                     { id: "dengue_kaggle_dataset", label: "dengue_kaggle_dataset (Kaggle)", available: disease === "dengue" },
                     { id: "anova_dataset", label: "anova_dataset (Analytics)", available: disease === "dengue" },
                   ].map((t) => (

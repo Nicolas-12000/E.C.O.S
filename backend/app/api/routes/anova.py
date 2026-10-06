@@ -29,7 +29,12 @@ def get_dengue_anova(
 
     # 2. Validar y procesar las tablas
     tables_list = [t.strip() for t in tables.split(",") if t.strip()]
-    valid_tables = ["fact_core_weekly", "dengue_kaggle_dataset", "anova_dataset"]
+    valid_tables = [
+        "silver_sivigila_weekly",
+        "fact_core_weekly",
+        "dengue_kaggle_dataset",
+        "anova_dataset",
+    ]
     
     for table in tables_list:
         if table not in valid_tables:
@@ -39,7 +44,8 @@ def get_dengue_anova(
             )
             
     # Validar que si no es dengue, solo se use fact_core_weekly
-    if disease != "dengue" and any(t != "fact_core_weekly" for t in tables_list):
+    sivigila_sources = ("fact_core_weekly", "silver_sivigila_weekly")
+    if disease != "dengue" and any(t not in sivigila_sources for t in tables_list):
         raise HTTPException(
             status_code=400,
             detail=f"Para la enfermedad '{disease}', solo se permite el uso de la tabla 'fact_core_weekly'."

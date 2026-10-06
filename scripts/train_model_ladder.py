@@ -22,6 +22,7 @@ from utils import add_lags, evaluate_metrics, load_dataset, split_train_test
 
 DEFAULT_PARQUET = REPO_ROOT / "data/processed/curated_weekly_parquet"
 DEFAULT_CSV = REPO_ROOT / "data/processed/curated_weekly_csv_fact_core_weekly"
+FEATURE_STORE = REPO_ROOT / "data/processed/feature_store_weekly.parquet"
 METRICS_OUT = MODELS_ROOT / "metrics.json"
 
 
@@ -84,7 +85,10 @@ def main() -> int:
     parser.add_argument("--hybrid-metrics", default=str(MODELS_ROOT / "final_model_metrics.json"))
     args = parser.parse_args()
 
-    df = load_dataset(DEFAULT_PARQUET, DEFAULT_CSV)
+    if FEATURE_STORE.exists():
+        df = pd.read_parquet(FEATURE_STORE)
+    else:
+        df = load_dataset(DEFAULT_PARQUET, DEFAULT_CSV)
     df["week_start_date"] = pd.to_datetime(df["week_start_date"], errors="coerce")
     df = df.dropna(subset=["week_start_date", "municipio_code", "disease"])
 
