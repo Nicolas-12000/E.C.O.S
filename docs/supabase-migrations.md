@@ -15,6 +15,7 @@ Los datos operativos ya cargados (`fact_core_weekly`, dimensiones, etc.) **no se
 | `supabase/migrations/0004_fact_core_climate_anomaly.sql` | Columnas anomalía clima + humedad en `fact_core_weekly` | init_02 |
 | `supabase/migrations/0005_whatif_scenarios.sql` | Tabla `whatif_scenarios` (simulaciones guardadas) | — |
 | `supabase/migrations/0006_dim_departamentos_coords.sql` | Lat/lon en `dim_departamentos` (mapa movilidad dashboard) | init_01 |
+| `supabase/migrations/0007_demo_chat_users.sql` | Login demo del asistente IA (`demo_chat_users`, pgcrypto) | — |
 
 Si la base **ya existe** en Supabase (tu caso), aplica todo el directorio `supabase/migrations` con **un comando**:
 

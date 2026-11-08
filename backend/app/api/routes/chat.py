@@ -11,13 +11,14 @@ try:
 except ImportError:
     pd = None
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.schemas.epidemiology import ChatRequest, ChatResponse, ChatSource
 from app.services.epidemiology import VALID_DISEASES, get_history, get_last_known_features, get_mobility, _load_departamento_coords
 from app.services import rag
 from app.services.weather import fetch_open_meteo_weekly
+from app.api.deps import require_demo_chat_auth
 from app.core.db import get_db_connection
 from app.core.epi_date import find_date_in_text, resolve_epi_date
 
@@ -1643,7 +1644,7 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
 # ---------------------------------------------------------------------------
 
 @router.post("/chat", response_model=ChatResponse, summary="Asistente conversacional ECOS")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, _user: str | None = Depends(require_demo_chat_auth)):
     if not req.question.strip():
         raise HTTPException(status_code=422, detail="question is required")
 
@@ -1718,7 +1719,7 @@ class ClearChatRequest(BaseModel):
 
 
 @router.post("/chat/clear", summary="Borrar historial de chat")
-def clear_chat(req: ClearChatRequest):
+def clear_chat(req: ClearChatRequest, _user: str | None = Depends(require_demo_chat_auth)):
     if req.session_id in chat_history_cache:
         del chat_history_cache[req.session_id]
         logger.info(f"Cleared chat history for session {req.session_id}")

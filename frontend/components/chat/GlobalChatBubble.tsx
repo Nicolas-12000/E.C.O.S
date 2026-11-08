@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useRef, useEffect } from "react"
-import { Send, Bot, Loader2, MessageCircle, ChevronDown, Trash2, Sparkles } from "lucide-react"
+import { Send, Bot, Loader2, MessageCircle, ChevronDown, Trash2, Sparkles, LogIn, KeyRound } from "lucide-react"
 import { Button } from "@/components/ui/Button"
 import { API_BASE } from "@/lib/api"
 
@@ -28,20 +28,85 @@ const WELCOME: ChatMessage = {
   content: "👋 ¡Hola! Soy el asistente de **ECOS** — tu copiloto de vigilancia epidemiológica.\n\nPregúntame sobre dengue, malaria, zika o chikungunya en cualquier departamento.",
 }
 
+const CHAT_TOKEN_KEY = "ecos_chat_token"
+/** Seed 0007 — Bayern 4-3 Madrid, Allianz, abril 2026 */
+const DEMO_EMAIL = "camavinga@allianz2026.ecos"
+const DEMO_PASSWORD = "Bayern4-3"
+
 export function GlobalChatBubble() {
   const [isOpen, setIsOpen] = useState(false)
   const [messages, setMessages] = useState<ChatMessage[]>([WELCOME])
   const [input, setInput] = useState("")
   const [isLoading, setIsLoading] = useState(false)
   const [sessionId, setSessionId] = useState<string | null>(null)
+  const [chatToken, setChatToken] = useState<string | null>(null)
+  const [loginEmail, setLoginEmail] = useState("")
+  const [loginPassword, setLoginPassword] = useState("")
+  const [loginError, setLoginError] = useState("")
+  const [loginLoading, setLoginLoading] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    if (isOpen) endRef.current?.scrollIntoView({ behavior: "smooth" })
-  }, [messages, isOpen])
+    try {
+      setChatToken(localStorage.getItem(CHAT_TOKEN_KEY))
+    } catch {
+      setChatToken(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isOpen && chatToken) endRef.current?.scrollIntoView({ behavior: "smooth" })
+  }, [messages, isOpen, chatToken])
+
+  const authHeaders = (extra?: Record<string, string>) => {
+    const headers: Record<string, string> = { "Content-Type": "application/json", ...extra }
+    if (chatToken) headers.Authorization = `Bearer ${chatToken}`
+    return headers
+  }
+
+  const clearAuth = () => {
+    try {
+      localStorage.removeItem(CHAT_TOKEN_KEY)
+    } catch {
+      /* ignore */
+    }
+    setChatToken(null)
+    setMessages([WELCOME])
+    setSessionId(null)
+  }
+
+  const fillDemoCredentials = () => {
+    setLoginEmail(DEMO_EMAIL)
+    setLoginPassword(DEMO_PASSWORD)
+    setLoginError("")
+  }
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (loginLoading) return
+    setLoginError("")
+    setLoginLoading(true)
+    try {
+      const res = await fetch(`${API_BASE}/api/v1/auth/demo-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ login: loginEmail.trim(), password: loginPassword }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.detail || "No se pudo iniciar sesión")
+      localStorage.setItem(CHAT_TOKEN_KEY, data.access_token)
+      setChatToken(data.access_token)
+      setLoginEmail("")
+      setLoginPassword("")
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : "Error de acceso")
+    } finally {
+      setLoginLoading(false)
+    }
+  }
 
   const sendMessage = async (text: string) => {
-    if (!text.trim() || isLoading) return
+    if (!chatToken || !text.trim() || isLoading) return
     const msg = text.trim()
     setInput("")
     setMessages(p => [...p, { role: "user", content: msg }])
@@ -49,10 +114,14 @@ export function GlobalChatBubble() {
     try {
       const res = await fetch(`${API_BASE}/api/v1/chat`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: authHeaders(),
         body: JSON.stringify({ question: msg, session_id: sessionId }),
       })
       const data = await res.json()
+      if (res.status === 401) {
+        clearAuth()
+        throw new Error("Sesión expirada")
+      }
       if (!res.ok) throw new Error(data.detail || "Error")
       setSessionId(data.session_id)
       setMessages(p => [...p, { role: "assistant", content: data.answer, sources: data.sources }])
@@ -72,7 +141,7 @@ export function GlobalChatBubble() {
         console.log("Calling clear chat API...");
         const res = await fetch(`${API_BASE}/api/v1/chat/clear`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: authHeaders(),
           body: JSON.stringify({ session_id: sessionId }),
         });
         console.log("Clear chat API response status:", res.status);
@@ -146,7 +215,18 @@ export function GlobalChatBubble() {
             </div>
           </div>
           <div className="flex items-center gap-1">
-            {messages.length > 1 && (
+            {chatToken && (
+              <button
+                type="button"
+                onClick={clearAuth}
+                className="text-[10px] px-2 py-1 rounded-md transition-colors hover:bg-gray-100"
+                style={{ color: "#9CA3AF" }}
+                title="Cerrar sesión demo"
+              >
+                Salir
+              </button>
+            )}
+            {chatToken && messages.length > 1 && (
               <button 
                 onClick={() => { 
                   console.log("Trash button clicked!"); 
@@ -165,6 +245,77 @@ export function GlobalChatBubble() {
           </div>
         </div>
 
+        {/* Login demo */}
+        {!chatToken ? (
+          <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4" style={{ backgroundColor: "#FFFFFF" }}>
+            <div className="text-center pt-2">
+              <div
+                className="w-12 h-12 mx-auto rounded-full flex items-center justify-center mb-3"
+                style={{ backgroundColor: "rgba(184,66,46,0.08)" }}
+              >
+                <KeyRound className="w-6 h-6" style={{ color: "#B8422E" }} />
+              </div>
+              <p className="text-sm font-semibold" style={{ color: "#1A1C1E" }}>Acceso al asistente IA</p>
+              <p className="text-xs mt-1 px-2" style={{ color: "#9CA3AF" }}>
+                Inicia sesión para probar el chat RAG (requisito del proyecto).
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={fillDemoCredentials}
+              className="text-left rounded-xl p-3 transition-all hover:scale-[1.01] active:scale-[0.99] cursor-pointer"
+              style={{
+                backgroundColor: "#FFF8F6",
+                border: "1px dashed #B8422E",
+                boxShadow: "0 0 0 0 rgba(184,66,46,0.15)",
+              }}
+              title="Clic para rellenar correo y contraseña"
+            >
+              <p className="text-[10px] uppercase tracking-wider font-semibold mb-2" style={{ color: "#B8422E" }}>
+                Demo · clic para autocompletar
+              </p>
+              <p className="text-[12px]" style={{ color: "#6C7278" }}>
+                <span className="font-medium" style={{ color: "#1A1C1E" }}>Correo:</span> {DEMO_EMAIL}
+              </p>
+              <p className="text-[12px] mt-1" style={{ color: "#6C7278" }}>
+                <span className="font-medium" style={{ color: "#1A1C1E" }}>Contraseña:</span> {DEMO_PASSWORD}
+              </p>
+              <p className="text-[10px] mt-2 italic" style={{ color: "#9CA3AF" }}>
+                Pista: vuelta en Baviera, abril 2026 — marcador del partido
+              </p>
+            </button>
+
+            <form onSubmit={handleLogin} className="space-y-3">
+              <input
+                type="email"
+                autoComplete="username"
+                value={loginEmail}
+                onChange={(e) => setLoginEmail(e.target.value)}
+                placeholder="Correo"
+                className="w-full rounded-xl px-4 py-2.5 text-sm"
+                style={{ backgroundColor: "#F7F5F2", border: "1px solid #E5E2DC", color: "#1A1C1E" }}
+              />
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="Contraseña"
+                className="w-full rounded-xl px-4 py-2.5 text-sm"
+                style={{ backgroundColor: "#F7F5F2", border: "1px solid #E5E2DC", color: "#1A1C1E" }}
+              />
+              {loginError && (
+                <p className="text-xs" style={{ color: "#B8422E" }}>{loginError}</p>
+              )}
+              <Button type="submit" variant="primary" className="w-full gap-2" disabled={loginLoading || !loginEmail || !loginPassword}>
+                {loginLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <LogIn className="w-4 h-4" />}
+                Entrar
+              </Button>
+            </form>
+          </div>
+        ) : (
+        <>
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3" style={{ backgroundColor: "#FFFFFF" }}>
           {messages.map((msg, idx) => (
@@ -263,6 +414,8 @@ export function GlobalChatBubble() {
             </Button>
           </form>
         </div>
+        </>
+        )}
       </div>
     </>
   )

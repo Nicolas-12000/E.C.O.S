@@ -1,6 +1,7 @@
 from fastapi import APIRouter
 
 # Producción free (512 MB): rutas del producto completo; pronóstico desde Supabase, no joblib en RAM.
+from app.api.routes.auth_demo import router as auth_demo_router
 from app.api.routes.health import router as health_router
 from app.api.routes.history import router as history_router
 from app.api.routes.chat import router as chat_router
@@ -24,6 +25,7 @@ api_router.include_router(health_router, tags=["health"])
 api_prefixes = ["/api", "/api/v1", "/api/v3"]
 
 routers = [
+    (auth_demo_router, "auth"),
     (chat_router, "chat"),
     (history_router, "history"),
     (alerts_router, "alerts"),

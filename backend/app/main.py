@@ -46,14 +46,18 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS — permite que el frontend Next.js se conecte
+# CORS — frontend Next.js (Vercel prod + previews *.vercel.app)
+_cors_regex = settings.resolved_cors_origin_regex
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.resolved_cors_origins,
+    allow_origin_regex=_cors_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+if _cors_regex and settings.env == "production":
+    logger.info("CORS allow_origin_regex enabled for Vercel deployments")
 
 app.include_router(api_router)
 

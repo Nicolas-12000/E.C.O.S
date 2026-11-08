@@ -28,8 +28,14 @@ class Settings(BaseSettings):
     # OpenWeather (opcional — solo si quieres datos de clima actual)
     openweather_api_key: str = ""
 
+    chat_demo_auth_required: bool = Field(default=True, validation_alias="CHAT_DEMO_AUTH_REQUIRED")
+    chat_demo_token_secret: str = Field(default="", validation_alias="CHAT_DEMO_TOKEN_SECRET")
+
     # Render/Vercel: lista separada por comas (no JSON).
     cors_origins: str = Field(default="", validation_alias="CORS_ORIGINS")
+    # Previews de Vercel (URL distinta a producción) — ver resolved_cors_origin_regex.
+    cors_allow_vercel: bool = Field(default=True, validation_alias="CORS_ALLOW_VERCEL")
+    cors_origin_regex: str = Field(default="", validation_alias="CORS_ORIGIN_REGEX")
 
     _DEFAULT_CORS_ORIGINS = (
         "http://localhost:3000",
@@ -40,9 +46,22 @@ class Settings(BaseSettings):
     @property
     def resolved_cors_origins(self) -> list[str]:
         raw = (self.cors_origins or "").strip()
-        if raw:
-            return [origin.strip() for origin in raw.split(",") if origin.strip()]
-        return list(self._DEFAULT_CORS_ORIGINS)
+        origins = (
+            [origin.strip() for origin in raw.split(",") if origin.strip()]
+            if raw
+            else list(self._DEFAULT_CORS_ORIGINS)
+        )
+        return origins
+
+    @property
+    def resolved_cors_origin_regex(self) -> str | None:
+        custom = (self.cors_origin_regex or "").strip()
+        if custom:
+            return custom
+        if self.cors_allow_vercel:
+            # Producción y previews: https://tu-app.vercel.app, https://tu-app-xxx.vercel.app, etc.
+            return r"https://.*\.vercel\.app"
+        return None
 
     model_config = SettingsConfigDict(
         env_file=str(REPO_ROOT / ".env"),
