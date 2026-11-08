@@ -69,6 +69,13 @@ def test_mobility_question_sets_flags():
     assert intent["wants_mobility"] is True
 
 
+def test_brotes_pacifico_general_intent():
+    intent = _detect_intent("Brotes en el Pacífico")
+    assert intent["wants_brotes"] is True
+    assert intent["region_norm"] == "PACIFICO"
+    assert intent["wants_region"] is True
+
+
 def test_resolve_intent_conversational_followup():
     history = [
         {"role": "user", "content": "cómo estará el dengue en nariño hoy"},

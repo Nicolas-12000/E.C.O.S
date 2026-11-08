@@ -19,6 +19,7 @@ from app.services.epidemiology import VALID_DISEASES, get_history, get_last_know
 from app.services import rag
 from app.services.weather import fetch_open_meteo_weekly
 from app.api.deps import require_demo_chat_auth
+from app.core.config import settings
 from app.core.db import get_db_connection
 from app.core.epi_date import find_date_in_text, resolve_epi_date
 
@@ -90,6 +91,10 @@ MOBILITY_KEYWORDS = {
     "movilidad", "flujo", "flujos", "transporte", "pasajeros", "viajeros",
     "contag", "propag", "propagación", "od ", "origen-destino",
     "movilidad y riesgo",
+}
+
+OUTBREAK_KEYWORDS = {
+    "brote", "brotes", "broteo", "epidemia", "alerta sanitaria", "alerta epidemiológica",
 }
 
 OUTLOOK_KEYWORDS = (
@@ -953,6 +958,7 @@ def _detect_intent(question: str) -> dict:
     wants_national = any(kw in lowered for kw in NATIONAL_KEYWORDS) and not departamento_code
     wants_region = any(kw in lowered for kw in REGION_KEYWORDS)
     wants_mobility = any(kw in lowered for kw in MOBILITY_KEYWORDS)
+    wants_brotes = any(kw in lowered for kw in OUTBREAK_KEYWORDS)
 
     # Detect region name
     # NOTE: Using exact matches database dim_departamentos.region_norm values
@@ -968,6 +974,8 @@ def _detect_intent(question: str) -> dict:
         if kw in lowered:
             region_norm = rn
             break
+    if region_norm:
+        wants_region = True
 
     fecha = find_date_in_text(question)
     wants_outlook = any(kw in lowered for kw in OUTLOOK_KEYWORDS)
@@ -1022,6 +1030,7 @@ def _detect_intent(question: str) -> dict:
         "fecha": fecha,
         "response_mode": response_mode,
         "wants_outlook": wants_outlook,
+        "wants_brotes": wants_brotes,
     }
 
 
@@ -1248,8 +1257,108 @@ def _search_knowledge_base(question: str, limit: int = 3) -> list[ChatSource]:
     return sources
 
 
+def _query_region_outbreak_rows(region_norm: str, disease: str | None, limit: int = 6) -> list[tuple]:
+    filt = "UPPER(d.region_norm) LIKE UPPER(%s)"
+    params: list = [region_norm]
+    if disease:
+        filt += " AND p.disease = %s"
+        params.append(disease)
+    return _db_execute(
+        f"""
+        SELECT p.departamento_code, p.disease, p.epi_year, p.epi_week,
+               p.predicted_cases, p.outbreak_flag
+        FROM public.predictions p
+        INNER JOIN public.dim_departamentos d ON p.departamento_code = d.departamento_code
+        WHERE {filt} AND COALESCE(p.outbreak_flag, false) = true
+        ORDER BY p.epi_year DESC, p.epi_week DESC
+        LIMIT %s
+        """,
+        tuple(params + [limit]),
+    )
+
+
+def _region_summary_answer(intent: dict) -> tuple[str, list[ChatSource]]:
+    """Resumen regional (preguntas generales: «brotes en el Pacífico», etc.)."""
+    region_norm = intent.get("region_norm")
+    if not region_norm:
+        return "", []
+    disease = intent.get("disease")
+    parts: list[str] = []
+    sources: list[ChatSource] = []
+
+    if intent.get("wants_brotes"):
+        parts.append(
+            f"Vista de vigilancia para la región {region_norm}: "
+            "brotes en ECOS se marcan cuando la estimación supera el canal endémico "
+            "o hay señal en predicciones; abajo el resumen histórico y señales del modelo."
+        )
+        rows = _query_region_outbreak_rows(region_norm, disease)
+        if rows:
+            sigs = ", ".join(
+                f"depto {r[0]} {r[1]} S{r[3]}/{r[2]} (~{int(r[4] or 0)} casos)"
+                for r in rows[:4]
+            )
+            parts.append(f" Alertas de brote en predicciones recientes: {sigs}.")
+
+    rdata = _query_region_summary(region_norm, disease)
+    if rdata:
+        year_list = sorted(rdata["by_year"].items())
+        year_str = ", ".join(
+            f"{y}: {data['total']} casos (prom {data['avg_weekly']}/sem, máx {data['max_weekly']})"
+            for y, data in year_list
+        )
+        dis_str = _format_by_disease_snippet(rdata["by_disease"], with_avg=False)
+        recent_reversed = list(reversed(rdata["recent_weeks"]))
+        recent_trend = ""
+        if len(recent_reversed) >= 2:
+            first_cases = recent_reversed[0]["cases"]
+            last_cases = recent_reversed[-1]["cases"]
+            if last_cases > first_cases:
+                pct_change = ((last_cases - first_cases) / first_cases * 100) if first_cases > 0 else 100
+                recent_trend = f" (tendencia ascendente: +{round(pct_change, 1)}%)"
+            elif last_cases < first_cases:
+                pct_change = ((first_cases - last_cases) / first_cases * 100) if first_cases > 0 else 100
+                recent_trend = f" (tendencia descendente: -{round(pct_change, 1)}%)"
+            else:
+                recent_trend = " (tendencia estable)"
+        recent_str = ", ".join(
+            f"S{w['week']}/{w['year']}: {w['cases']}" for w in rdata["recent_weeks"]
+        )
+        stats_str = ""
+        if rdata.get("statistics"):
+            stats = rdata["statistics"]
+            stats_str = (
+                f" Promedio histórico {stats['avg_weekly']} casos/sem, "
+                f"máx semanal {stats['max_weekly']}."
+            )
+        top_str = ", ".join(
+            f"{_dept_display_name(d)} ({c} casos)" for d, c in rdata["top_deptos"][:5]
+        )
+        label = disease if disease else "todas las enfermedades"
+        parts.append(
+            f"Región {region_norm} | {label} "
+            f"(corte {rdata['data_from']} → {rdata['data_to']}): "
+            f"{rdata['total_historical']} casos acumulados.{dis_str} "
+            f"Últimas semanas: {recent_str}{recent_trend}.{stats_str} "
+            f"Departamentos con más carga histórica: {top_str}. "
+            "Si quieres una enfermedad concreta, añádela (ej. «brotes de dengue en el Pacífico»)."
+        )
+        sources.append(
+            ChatSource(
+                title=_get_friendly_source_name("resumen_region"),
+                excerpt=f"Región {region_norm}: {rdata['total_historical']} casos. Top: {top_str[:120]}",
+                source_type="data",
+            )
+        )
+    elif not parts:
+        parts.append(f"No hay datos curados para la región {region_norm} en este momento.")
+    return " ".join(parts), sources[:5]
+
+
 def _document_snippets(question: str, limit: int = 3) -> list[ChatSource]:
     """Recupera fragmentos de documentos relevantes usando búsqueda semántica o textual."""
+    if settings.lite_production:
+        return _search_knowledge_base(question, limit=limit)
     # Intentar búsqueda semántica (vectores en Supabase) primero
     if semantic_available():
         try:
@@ -1291,6 +1400,12 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
         text, mob_sources = _mobility_risk_overview(intent.get("disease"))
         intent["verbatim"] = True
         return text, mob_sources
+
+    if intent.get("region_norm") and (intent.get("wants_region") or intent.get("wants_brotes")):
+        text, reg_sources = _region_summary_answer(intent)
+        if text:
+            intent["verbatim"] = True
+            return text, reg_sources
 
     sources = _document_snippets(question)
     parts: list[str] = []
@@ -1643,78 +1758,7 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
             parts.append(f"No se encontraron datos para el departamento {depto}.")
         return " ".join(parts) or "Sin datos.", sources[:5]
 
-    # ── 4. Región ────────────────────────────────────────────────────────────
-    if intent["wants_region"] and intent["region_norm"]:
-        rdata = _query_region_summary(intent["region_norm"], disease)
-        if rdata:
-            year_list = sorted(rdata["by_year"].items())
-            year_str = ", ".join(
-                f"{y}: {data['total']} casos (prom {data['avg_weekly']}/sem, máx {data['max_weekly']})"
-                for y, data in year_list
-            )
-            
-            dis_str = ""
-            if rdata["by_disease"]:
-                dis_str = _format_by_disease_snippet(rdata["by_disease"], with_avg=True)
-            
-            recent_reversed = list(reversed(rdata["recent_weeks"])) 
-            recent_trend = ""
-            if len(recent_reversed) >= 2:
-                first_cases = recent_reversed[0]["cases"]
-                last_cases = recent_reversed[-1]["cases"]
-                if last_cases > first_cases:
-                    pct_change = ((last_cases - first_cases) / first_cases * 100) if first_cases > 0 else 100
-                    recent_trend = f" (tendencia ascendente: +{round(pct_change, 1)}%)"
-                elif last_cases < first_cases:
-                    pct_change = ((first_cases - last_cases) / first_cases * 100) if first_cases > 0 else 100
-                    recent_trend = f" (tendencia descendente: -{round(pct_change, 1)}%)"
-                else:
-                    recent_trend = " (tendencia estable)"
-            
-            recent_str = ", ".join(
-                f"S{w['week']}/{w['year']}: {w['cases']}" for w in rdata["recent_weeks"]
-            )
-            
-            stats_str = ""
-            if rdata.get("statistics"):
-                stats = rdata["statistics"]
-                stats_str = (
-                    f" Estadísticas históricas: promedio {stats['avg_weekly']} casos/sem, "
-                    f"mediana {stats['median_weekly']}, mínimo {stats['min_weekly']}, máximo {stats['max_weekly']}. "
-                    f"Percentil 75: {stats['p75_weekly']}, percentil 90: {stats['p90_weekly']}."
-                )
-            
-            seasonal_str = ""
-            if rdata.get("seasonal_comparison"):
-                seasonal_parts = []
-                for year, weeks in sorted(rdata["seasonal_comparison"].items(), reverse=True):
-                    weeks_str = ", ".join(f"S{w['week']}:{w['cases']}" for w in sorted(weeks, key=lambda x: x["week"]))
-                    seasonal_parts.append(f"{year}: {weeks_str}")
-                if seasonal_parts:
-                    seasonal_str = f" Comparación estacional (mismas semanas): {'; '.join(seasonal_parts)}."
-            
-            top_str = ", ".join(f"depto {d}: {c}" for d, c in rdata["top_deptos"])
-            label = disease if disease else "todas las enfermedades"
-            parts.append(
-                f"Región {intent['region_norm']} | {label} "
-                f"(datos {rdata['data_from']} → {rdata['data_to']}, {rdata['n_weeks']} semanas): "
-                f"TOTAL ACUMULADO: {rdata['total_historical']} casos."
-                f"{dis_str}"
-                f" Desglose anual: {year_str}."
-                f" Año pico: {rdata['peak_year']} ({rdata['peak_cases']} casos)."
-                f" Últimas 12 semanas: {recent_str}{recent_trend}."
-                f"{stats_str}"
-                f"{seasonal_str}"
-                f" Top departamentos: {top_str}."
-            )
-            sources.append(ChatSource(
-                title=_get_friendly_source_name("resumen_region"),
-                excerpt=f"Región {intent['region_norm']} | {label}: {rdata['total_historical']} casos totales. Pico {rdata['peak_year']}.",
-                source_type="data",
-            ))
-        else:
-            parts.append(f"No se encontraron datos para la región {intent['region_norm']}.")
-        return " ".join(parts) or "Sin datos para esa región.", sources[:5]
+    # ── 4. Región: resuelto al inicio de _build_answer (_region_summary_answer) ──
 
     # ── 5. Nacional (total Colombia o por enfermedad) ────────────────────────
     if intent["wants_national"] or (disease and not depto and not muni):
@@ -1864,9 +1908,24 @@ def chat(req: ChatRequest, _user: str | None = Depends(require_demo_chat_auth)):
     if req.departamento_code:
         intent["departamento_code"] = req.departamento_code
 
-    answer, sources = _build_answer(data_question, intent)
+    try:
+        answer, sources = _build_answer(data_question, intent)
+    except Exception:
+        logger.exception("Chat _build_answer failed for %r", req.question)
+        answer = (
+            "No pude armar los datos para esa pregunta. "
+            "Prueba con departamento o enfermedad explícitos, por ejemplo "
+            "«dengue en Nariño» o «brotes de dengue en el Pacífico»."
+        )
+        sources = []
     if not intent.get("verbatim"):
-        answer = rag.generate_answer(req.question, sources, fallback=answer, response_mode=intent["response_mode"], chat_history=chat_history)
+        answer = rag.generate_answer(
+            req.question,
+            sources,
+            fallback=answer,
+            response_mode=intent["response_mode"],
+            chat_history=chat_history,
+        )
 
     # Save current conversation to cache
     chat_history.append({"role": "user", "content": req.question})
