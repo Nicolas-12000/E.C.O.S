@@ -35,7 +35,7 @@ Frontend (Vercel) → Backend RAG (Render) → Base de datos (Supabase/PostgreSQ
 | `ENV` | `production` | Sí | Entorno de producción |
 | `DEBUG` | `false` | Sí | Desactivar modo debug |
 | `GROQ_API_KEY` | `tu-api-key` | Sí | API Key de Groq para RAG |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Sí | Modelo de Groq a usar |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` | Sí | Modelo de Groq (chat/RAG) |
 | `CORS_ORIGINS` | `https://tu-frontend.vercel.app,http://localhost:3000` | Sí | Orígenes permitidos para CORS |
 | `SUPABASE_URL` | `tu-url-supabase` | No | URL de Supabase (opcional) |
 | `SUPABASE_ANON_KEY` | `tu-anon-key` | No | Key anónima de Supabase (opcional) |
@@ -84,7 +84,7 @@ Frontend (Vercel) → Backend RAG (Render) → Base de datos (Supabase/PostgreSQ
 ENV=production
 DEBUG=false
 GROQ_API_KEY=tu_api_key_aqui
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 CORS_ORIGINS=https://tu-frontend.vercel.app,http://localhost:3000
 # Opcionales:
 SUPABASE_URL=tu_url_supabase

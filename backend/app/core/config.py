@@ -14,7 +14,8 @@ class Settings(BaseSettings):
 
     # Groq (LLM para RAG)
     groq_api_key: str = ""
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Calidad episodemiología + español; reemplazo recomendado por Groq frente a Llama 3.3 70B.
+    groq_model: str = "openai/gpt-oss-120b"
 
     # Supabase (opcional)
     supabase_url: str = ""
@@ -27,22 +28,21 @@ class Settings(BaseSettings):
     # OpenWeather (opcional — solo si quieres datos de clima actual)
     openweather_api_key: str = ""
 
-    # CORS - parse from comma-separated string or use defaults
-    cors_origins: list[str] = [
+    # Render/Vercel: lista separada por comas (no JSON).
+    cors_origins: str = Field(default="", validation_alias="CORS_ORIGINS")
+
+    _DEFAULT_CORS_ORIGINS = (
         "http://localhost:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3000",
-    ]
-    
+    )
+
     @property
     def resolved_cors_origins(self) -> list[str]:
-        """Parse CORS origins from environment variable or use defaults."""
-        import os
-        cors_env = os.getenv("CORS_ORIGINS", "")
-        if cors_env:
-            # Split by comma and strip whitespace
-            return [origin.strip() for origin in cors_env.split(",") if origin.strip()]
-        return self.cors_origins
+        raw = (self.cors_origins or "").strip()
+        if raw:
+            return [origin.strip() for origin in raw.split(",") if origin.strip()]
+        return list(self._DEFAULT_CORS_ORIGINS)
 
     model_config = SettingsConfigDict(
         env_file=str(REPO_ROOT / ".env"),

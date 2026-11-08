@@ -12,7 +12,7 @@
 - [ ] `ENV=production` configurado
 - [ ] `DEBUG=false` configurado
 - [ ] `GROQ_API_KEY` configurada (valor válido)
-- [ ] `GROQ_MODEL` configurado como `llama-3.3-70b-versatile`
+- [ ] `GROQ_MODEL` configurado como `openai/gpt-oss-120b`
 - [ ] `CORS_ORIGINS` incluye URL del frontend
 - [ ] Variables de base de datos configuradas (si aplica)
 

@@ -93,7 +93,7 @@ Frontend (Next.js 15) → Backend (FastAPI) → Base de datos (Supabase/PostgreS
 ENV=production
 DEBUG=false
 GROQ_API_KEY=tu_api_key_aqui
-GROQ_MODEL=llama-3.3-70b-versatile
+GROQ_MODEL=openai/gpt-oss-120b
 CORS_ORIGINS=https://tu-frontend.vercel.app,http://localhost:3000
 ```
 

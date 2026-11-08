@@ -53,9 +53,9 @@ Obligatorias en Render:
 | `ENV` | `production` |
 | `DEBUG` | `false` |
 | `GROQ_API_KEY` | (secret — Groq console) |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` |
+| `GROQ_MODEL` | `openai/gpt-oss-120b` |
 | `SUPABASE_DB_URL` | `postgresql://…` (Session / Direct de Supabase) |
-| `CORS_ORIGINS` | `https://TU-APP.vercel.app,http://localhost:3000` |
+| `CORS_ORIGINS` | `https://TU-APP.vercel.app,http://localhost:3000` (coma, **sin** corchetes JSON) |
 
 Opcionales:
 
