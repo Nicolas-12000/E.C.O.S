@@ -55,7 +55,7 @@ Obligatorias en Render:
 | `GROQ_API_KEY` | (secret — Groq console) |
 | `GROQ_MODEL` | `openai/gpt-oss-120b` |
 | `SUPABASE_DB_URL` | `postgresql://…` (Session / Direct de Supabase) |
-| `CORS_ORIGINS` | `https://TU-APP.vercel.app,http://localhost:3000` (coma, **sin** corchetes JSON) |
+| `CORS_ORIGINS` | `https://TU-APP.vercel.app,http://localhost:3000` (coma, **sin** JSON) — o **borrar** la variable (previews usan regex `*.vercel.app`) |
 | `CORS_ALLOW_VERCEL` | `true` (default) — permite **previews** `https://….vercel.app` vía regex |
 | `CHAT_DEMO_AUTH_REQUIRED` | `true` (login obligatorio para `/chat`; migración `0007`) |
 | `CHAT_DEMO_TOKEN_SECRET` | string aleatorio largo (opcional; si no, usa default interno) |

@@ -131,6 +131,10 @@ def get_data_as_of() -> dict | None:
 def _load_df() -> pd.DataFrame:
     """Carga el dataset curado una vez y lo cachea en memoria."""
     db_url = settings.resolved_database_url()
+    if db_url and settings.lite_production:
+        raise FileNotFoundError(
+            "Full in-memory load disabled on Render lite; use SQL-backed helpers."
+        )
     if db_url:
         try:
             return _load_df_from_supabase()
@@ -159,8 +163,34 @@ def _load_df() -> pd.DataFrame:
     raise FileNotFoundError("Curated dataset not found. Run curate_weekly_spark.py first.")
 
 
+def _get_history_from_db(municipio_code: str, disease: str, limit: int) -> pd.DataFrame:
+    muni = str(municipio_code).strip().zfill(5)
+    query = """
+        SELECT *
+        FROM public.fact_core_weekly
+        WHERE municipio_code = %s AND disease = %s
+        ORDER BY week_start_date DESC NULLS LAST
+        LIMIT %s
+    """
+    with get_db_connection() as conn:
+        df = pd.read_sql(query, conn, params=(muni, disease, limit))
+    if df.empty:
+        return df
+    df["week_start_date"] = pd.to_datetime(df["week_start_date"], errors="coerce")
+    df["cases_total"] = pd.to_numeric(df["cases_total"], errors="coerce").fillna(0).astype(int)
+    return df.reset_index(drop=True)
+
+
 def get_history(municipio_code: str, disease: str, limit: int = 104) -> pd.DataFrame:
     """Retorna las últimas `limit` semanas de historia para un municipio y enfermedad."""
+    if settings.resolved_database_url():
+        try:
+            return _get_history_from_db(municipio_code, disease, limit)
+        except Exception as exc:
+            logger.warning("get_history SQL failed (%s)", exc)
+            if settings.lite_production:
+                return pd.DataFrame()
+
     df = _load_df()
     mask = (df["municipio_code"] == municipio_code) & (df["disease"] == disease)
     result = df[mask].sort_values("week_start_date", ascending=False).head(limit)

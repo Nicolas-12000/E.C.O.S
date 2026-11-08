@@ -1,4 +1,6 @@
+import os
 from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -31,11 +33,8 @@ class Settings(BaseSettings):
     chat_demo_auth_required: bool = Field(default=True, validation_alias="CHAT_DEMO_AUTH_REQUIRED")
     chat_demo_token_secret: str = Field(default="", validation_alias="CHAT_DEMO_TOKEN_SECRET")
 
-    # Render/Vercel: lista separada por comas (no JSON).
-    cors_origins: str = Field(default="", validation_alias="CORS_ORIGINS")
-    # Previews de Vercel (URL distinta a producción) — ver resolved_cors_origin_regex.
+    # CORS_ORIGINS se lee con os.getenv (evita pydantic JSON en listas legacy).
     cors_allow_vercel: bool = Field(default=True, validation_alias="CORS_ALLOW_VERCEL")
-    cors_origin_regex: str = Field(default="", validation_alias="CORS_ORIGIN_REGEX")
 
     _DEFAULT_CORS_ORIGINS = (
         "http://localhost:3000",
@@ -45,21 +44,23 @@ class Settings(BaseSettings):
 
     @property
     def resolved_cors_origins(self) -> list[str]:
-        raw = (self.cors_origins or "").strip()
-        origins = (
-            [origin.strip() for origin in raw.split(",") if origin.strip()]
-            if raw
-            else list(self._DEFAULT_CORS_ORIGINS)
-        )
-        return origins
+        raw = os.getenv("CORS_ORIGINS", "").strip()
+        if raw:
+            return [origin.strip() for origin in raw.split(",") if origin.strip()]
+        return list(self._DEFAULT_CORS_ORIGINS)
 
     @property
     def resolved_cors_origin_regex(self) -> str | None:
-        custom = (self.cors_origin_regex or "").strip()
+        custom = os.getenv("CORS_ORIGIN_REGEX", "").strip()
         if custom:
             return custom
-        if self.cors_allow_vercel or self.env == "production":
-            # Producción y previews: https://tu-app.vercel.app, https://e-c-o-xxx-teams.vercel.app, etc.
+        allow = os.getenv("CORS_ALLOW_VERCEL", "true").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+            "off",
+        )
+        if allow or self.env == "production":
             return r"https://.*\.vercel\.app"
         return None
 
