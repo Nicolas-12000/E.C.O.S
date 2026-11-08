@@ -4,7 +4,7 @@
 #
 #   pip install git-filter-repo
 #   ./scripts/export_child_repos.sh --output ~/exports/ecos-children
-#   ./scripts/export_child_repos.sh --output ~/exports/ecos-children --push
+#   ./scripts/export_child_repos.sh --output ~/exports/ecos-children --densify --push
 #
 # Env (optional, for --push):
 #   ECOS_API_REMOTE   e.g. git@github.com:USER/ecos-api.git
@@ -17,6 +17,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUTPUT=""
 DRY_RUN=false
 DO_PUSH=false
+DO_DENSIFY=false
+DENSIFY_CHUNK_API="${DENSIFY_CHUNK_API:-3}"
+DENSIFY_CHUNK_DATA="${DENSIFY_CHUNK_DATA:-2}"
+DENSIFY_CHUNK_FRONT="${DENSIFY_CHUNK_FRONT:-2}"
 
 usage() {
   sed -n '1,20p' "$0" | tail -n +2
@@ -29,6 +33,7 @@ while [[ $# -gt 0 ]]; do
     --output) OUTPUT="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
     --push) DO_PUSH=true; shift ;;
+    --densify) DO_DENSIFY=true; shift ;;
     *) echo "[error] unknown arg: $1" >&2; usage 1 ;;
   esac
 done
@@ -70,6 +75,11 @@ API_PATHS=(
   scripts/predict.py
   scripts/debug_db.py
   scripts/send_alerts.py
+  docs/
+  proto/
+  AGENTS.md
+  README.md
+  .github/
 )
 
 DATA_PATHS=(
@@ -98,11 +108,25 @@ DATA_PATHS=(
   scripts/geo.py
   scripts/version_snapshot.py
   scripts/README.md
+  scripts/migrate_supabase.py
+  scripts/migrate_supabase.sh
+  scripts/validate_gold_contract.py
+  scripts/weekly_forecast_job.py
+  scripts/train_model_ladder.py
+  scripts/build_feature_store.py
+  supabase/
+  models/
+  docs/supabase-migrations.md
+  docs/CHILD_REPOS.md
+  README.md
   .gitignore
 )
 
 FRONT_PATHS=(
   frontend/
+  docs/RENDER_SETUP.md
+  DEPLOYMENT.md
+  README.md
   .gitignore
 )
 
@@ -201,6 +225,21 @@ npm run dev
 Nota: si el repo solo contiene \`frontend/\`, ejecuta comandos dentro de \`frontend/\`.
 EOF
 )"
+
+  if $DO_DENSIFY; then
+    DENSIFY="$ROOT/scripts/densify_child_history.py"
+    if [[ ! -f "$DENSIFY" ]]; then
+      echo "[error] missing $DENSIFY" >&2
+      exit 1
+    fi
+    "$ROOT/.venv/bin/python" "$DENSIFY" "$OUTPUT/ecos-api" --chunk "$DENSIFY_CHUNK_API" || python3 "$DENSIFY" "$OUTPUT/ecos-api" --chunk "$DENSIFY_CHUNK_API"
+    "$ROOT/.venv/bin/python" "$DENSIFY" "$OUTPUT/ecos-data" --chunk "$DENSIFY_CHUNK_DATA" || python3 "$DENSIFY" "$OUTPUT/ecos-data" --chunk "$DENSIFY_CHUNK_DATA"
+    "$ROOT/.venv/bin/python" "$DENSIFY" "$OUTPUT/ecos-front" --chunk "$DENSIFY_CHUNK_FRONT" || python3 "$DENSIFY" "$OUTPUT/ecos-front" --chunk "$DENSIFY_CHUNK_FRONT"
+    total="$(git -C "$OUTPUT/ecos-api" rev-list --count HEAD)"
+    total=$((total + $(git -C "$OUTPUT/ecos-data" rev-list --count HEAD)))
+    total=$((total + $(git -C "$OUTPUT/ecos-front" rev-list --count HEAD)))
+    echo "[densify] total commits across children: $total"
+  fi
 
   if $DO_PUSH; then
     push_repo "$OUTPUT/ecos-api" "${ECOS_API_REMOTE:-}"

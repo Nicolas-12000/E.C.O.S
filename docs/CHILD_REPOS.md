@@ -53,8 +53,10 @@ ECOS_FRONT_REMOTE=git@github.com:TU_USUARIO/ecos-front.git
 
 ```bash
 set -a && source .env && set +a
-./scripts/export_child_repos.sh --output ~/exports/ecos-children --push
+./scripts/export_child_repos.sh --output ~/exports/ecos-children --densify --push
 ```
+
+`--densify` parte commits con muchos archivos (misma historia lógica, ~150–200 commits repartidos entre los tres hijos). Ajuste fino: `DENSIFY_CHUNK_API`, `DENSIFY_CHUNK_DATA`, `DENSIFY_CHUNK_FRONT` (default 3 / 2 / 2).
 
 `--push` usa **force** en `main` del hijo: el hijo es una vista del monorepo, no una línea de desarrollo paralela.
 
