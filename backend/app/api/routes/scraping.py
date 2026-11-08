@@ -2,6 +2,7 @@ import logging
 
 from fastapi import APIRouter, Query
 
+from app.core.config import settings
 from app.scraping.scraping_service import fetch_rss_articles
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,16 @@ def trigger_scraping():
     Inicia el proceso de scraping de señales (Trends y RSS) si no se ha ejecutado 
     en la última semana. Si está en cooldown, retorna el tiempo restante.
     """
+    if settings.lite_production:
+        return {
+            "status": "unavailable",
+            "message": (
+                "El scraping en vivo no corre en Render (plan free). "
+                "Las señales y noticias vienen del pipeline local cargado en Supabase."
+            ),
+            "last_run": None,
+        }
+
     import os
     import json
     import subprocess

@@ -77,7 +77,8 @@ export default function WhatIfPage() {
       setResult(res as WhatIfResponse)
       if (saveScenario) mutate()
     } catch (e) {
-      setRunError(e instanceof Error ? e.message : "Error en simulación")
+      const err = e as Error & { info?: { detail?: string } }
+      setRunError(err.info?.detail || err.message || "Error en simulación")
     } finally {
       setRunning(false)
     }
@@ -92,7 +93,8 @@ export default function WhatIfPage() {
       <h1 className="text-3xl font-bold text-(--color-primary) mb-2">Simulación de escenarios</h1>
       <p className="text-(--color-secondary) mb-8">
         Ajusta variables exógenas (vacunación, movilidad, clima, trends, noticias) y compara contra la
-        línea base del modelo híbrido cuando exista.
+        línea base del pronóstico en Supabase. En Render free la variación es una{" "}
+        <strong>aproximación didáctica</strong> (sin joblib en RAM).
       </p>
 
       <div className="space-y-6 rounded-lg border border-(--color-border) bg-(--color-surface) p-6 mb-8">

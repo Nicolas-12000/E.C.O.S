@@ -14,6 +14,7 @@ from app.api.routes.mobility import router as mobility_router
 from app.api.routes.timeseries import router as timeseries_router
 from app.api.routes.trends import router as trends_router
 from app.api.routes.news import router as news_router
+from app.api.routes.scraping import router as scraping_router
 from app.api.routes.whatif import router as whatif_router
 from app.api.routes.anova import router as anova_router
 from app.api.routes.weather import router as weather_router
@@ -36,6 +37,7 @@ routers = [
     (timeseries_router, "timeseries"),
     (trends_router, "trends"),
     (news_router, "news"),
+    (scraping_router, "scraping"),
     (whatif_router, "whatif"),
     (anova_router, "anova"),
     (weather_router, "weather"),

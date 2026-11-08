@@ -85,6 +85,7 @@ export default function NoticiasDashboard() {
   const { data, error, isLoading, mutate } = useSWR<NewsArticle[]>("/api/v1/news", fetcher)
   const [isSyncing, setIsSyncing] = useState(false)
   const [lastSync, setLastSync] = useState<number | null>(null)
+  const [syncNote, setSyncNote] = useState<string | null>(null)
 
   useEffect(() => {
     const saved = localStorage.getItem("ecos_last_scrape_news")
@@ -110,10 +111,14 @@ export default function NoticiasDashboard() {
         const lastRun = new Date(response.last_run).getTime()
         localStorage.setItem("ecos_last_scrape_news", lastRun.toString())
         setLastSync(lastRun)
+      } else if (response.status === "unavailable") {
+        setSyncNote(response.message || "Scraping no disponible en producción liviana.")
       }
       
       await mutate()
     } catch (err) {
+      const detail = (err as Error & { info?: { detail?: string }; status?: number }).info?.detail
+      setSyncNote(detail || "No se pudo sincronizar. ¿Backend desplegado con la última versión?")
       console.error("Error triggering scrape:", err)
     } finally {
       setIsSyncing(false)
@@ -149,6 +154,9 @@ export default function NoticiasDashboard() {
               <RefreshCcw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-(--color-tertiary)" : "text-(--color-secondary)"}`} />
               {isSyncing ? "Extrayendo noticias..." : "Sincronizar Scraping"}
             </button>
+            {syncNote && (
+              <p className="text-[9px] text-(--color-secondary) max-w-[220px] text-right leading-snug">{syncNote}</p>
+            )}
             {lastSync && (
               <p className="text-[9px] text-(--color-muted) font-display uppercase tracking-wider">
                 Última act: {new Date(lastSync).toLocaleDateString("es-CO", { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}

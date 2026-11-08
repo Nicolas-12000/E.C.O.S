@@ -57,6 +57,7 @@ export default function TendenciasDashboard() {
   const { data, error, isLoading, mutate } = useSWR<TrendsResponse>(apiUrl, fetcher)
   const [isSyncing, setIsSyncing] = useState(false)
   const [lastSync, setLastSync] = useState<number | null>(null)
+  const [syncNote, setSyncNote] = useState<string | null>(null)
 
   useEffect(() => {
     const saved = localStorage.getItem("ecos_last_scrape_trends")
@@ -80,10 +81,14 @@ export default function TendenciasDashboard() {
         const lastRun = new Date(response.last_run).getTime()
         localStorage.setItem("ecos_last_scrape_trends", lastRun.toString())
         setLastSync(lastRun)
+      } else if (response.status === "unavailable") {
+        setSyncNote(response.message || "Scraping no disponible en producción liviana.")
       }
       
       await mutate()
     } catch (err) {
+      const detail = (err as Error & { info?: { detail?: string } }).info?.detail
+      setSyncNote(detail || "No se pudo sincronizar. ¿Backend desplegado con la última versión?")
       console.error("Error triggering trends scrape:", err)
     } finally {
       setIsSyncing(false)
@@ -121,6 +126,9 @@ export default function TendenciasDashboard() {
               <RefreshCcw className={`w-3.5 h-3.5 ${isSyncing ? "animate-spin text-(--color-tertiary)" : "text-(--color-secondary)"}`} />
               {isSyncing ? "Scrapeando Google Trends..." : "Sincronizar Scraping"}
             </button>
+            {syncNote && (
+              <p className="text-[9px] text-(--color-secondary) max-w-[220px] text-right leading-snug">{syncNote}</p>
+            )}
             {lastSync && (
               <p className="text-[9px] text-(--color-muted) font-display uppercase tracking-wider">
                 Última act: {new Date(lastSync).toLocaleDateString("es-CO", { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
