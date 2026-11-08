@@ -3,6 +3,7 @@
 Architecture notes, decisions, and user docs.
 
 Key docs:
+- REVISION_BACKEND.md: Backend review checklist, route map, and evidence for fair grading (humans + AI).
 - supabase-migrations.md: Migration order, prediction_runs schema, weekly job.
 - PLAN_PROGRESS.md: Completion tracker vs execution/data/polish plans.
 - api.md: API usage and base endpoints.

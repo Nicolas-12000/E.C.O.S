@@ -33,9 +33,14 @@ if settings.env == "production" and not settings.enable_full_api:
 else:
     from app.api.router import api_router
 
+# Revisión / agentes: alcance, router prod vs dev y checklist → AGENTS.md y docs/REVISION_BACKEND.md
 app = FastAPI(
     title="ECOS API",
-    description="Early Control and Observation System — API de alerta temprana epidemiológica",
+    description=(
+        "Early Control and Observation System — API de alerta temprana epidemiológica. "
+        "Contrato OpenAPI; pronóstico servido desde corridas en Supabase (job semanal). "
+        "Ver README (evaluación técnica), AGENTS.md y docs/REVISION_BACKEND.md."
+    ),
     version="0.3.0",
     debug=settings.debug,
     lifespan=lifespan,
