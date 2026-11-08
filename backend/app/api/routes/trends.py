@@ -1,3 +1,4 @@
+import pandas as pd
 from fastapi import APIRouter, Query, HTTPException
 from app.schemas.epidemiology import TrendsResponse, TrendsItem
 from app.services.epidemiology import get_signals, VALID_DISEASES
@@ -17,16 +18,25 @@ def get_trends(
     if df.empty or "trends_score" not in df.columns:
         raise HTTPException(status_code=404, detail="No trends data found")
 
-    records = [
-        TrendsItem(
-            epi_year=int(row["epi_year"]),
-            epi_week=int(row["epi_week"]),
-            week_start_date=row["week_start_date"].date() if hasattr(row["week_start_date"], "date") else row["week_start_date"],
-            disease=disease,
-            trends_score=float(row["trends_score"]) if row["trends_score"] is not None else 0.0
+    records: list[TrendsItem] = []
+    for _, row in df.iterrows():
+        score = row.get("trends_score")
+        if score is None or (isinstance(score, float) and pd.isna(score)):
+            continue
+        records.append(
+            TrendsItem(
+                epi_year=int(row["epi_year"]),
+                epi_week=int(row["epi_week"]),
+                week_start_date=row["week_start_date"].date()
+                if hasattr(row["week_start_date"], "date")
+                else row["week_start_date"],
+                disease=disease,
+                trends_score=float(score),
+            )
         )
-        for _, row in df.iterrows() if row["trends_score"] is not None
-    ]
+
+    if not records:
+        raise HTTPException(status_code=404, detail="No trends data found")
 
     return TrendsResponse(
         departamento_code=departamento_code,

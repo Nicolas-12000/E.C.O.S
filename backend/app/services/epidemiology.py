@@ -167,11 +167,52 @@ def get_history(municipio_code: str, disease: str, limit: int = 104) -> pd.DataF
     return result.reset_index(drop=True)
 
 
+def _normalize_depto_code(departamento_code: str) -> str:
+    code = str(departamento_code).strip()
+    return code.zfill(2) if code.isdigit() else code
+
+
+def _get_signals_from_db(departamento_code: str, disease: str, limit: int) -> pd.DataFrame:
+    """Agrega en SQL (evita SELECT * en Render 512MB)."""
+    depto = _normalize_depto_code(departamento_code)
+    query = """
+        SELECT
+            epi_year,
+            epi_week,
+            week_start_date,
+            departamento_code,
+            AVG(vaccination_coverage_pct) AS vaccination_coverage_pct,
+            AVG(trends_score) AS trends_score,
+            SUM(COALESCE(rss_mentions, 0))::double precision AS rss_mentions,
+            AVG(signals_score) AS signals_score
+        FROM public.fact_core_weekly
+        WHERE departamento_code = %s AND disease = %s
+        GROUP BY epi_year, epi_week, week_start_date, departamento_code
+        ORDER BY week_start_date DESC NULLS LAST
+        LIMIT %s
+    """
+    with get_db_connection() as conn:
+        df = pd.read_sql(query, conn, params=(depto, disease, limit))
+    if df.empty:
+        return df
+    df["week_start_date"] = pd.to_datetime(df["week_start_date"], errors="coerce")
+    df["disease"] = disease
+    return df.reset_index(drop=True)
+
+
 def get_signals(departamento_code: str, disease: str, limit: int = 52) -> pd.DataFrame:
     """
     Retorna señales tempranas (RIPS, movilidad, vacunación) a nivel departamental.
     El dataset curado agrega estas features por municipio; aquí agrupamos a depto.
     """
+    if settings.resolved_database_url():
+        try:
+            return _get_signals_from_db(departamento_code, disease, limit)
+        except Exception as exc:
+            logger.warning("get_signals SQL path failed (%s)", exc)
+            if settings.lite_production:
+                return pd.DataFrame()
+
     df = _load_df()
     mask = (df["departamento_code"] == departamento_code) & (df["disease"] == disease)
     subset = df[mask].copy()

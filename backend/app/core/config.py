@@ -58,8 +58,8 @@ class Settings(BaseSettings):
         custom = (self.cors_origin_regex or "").strip()
         if custom:
             return custom
-        if self.cors_allow_vercel:
-            # Producción y previews: https://tu-app.vercel.app, https://tu-app-xxx.vercel.app, etc.
+        if self.cors_allow_vercel or self.env == "production":
+            # Producción y previews: https://tu-app.vercel.app, https://e-c-o-xxx-teams.vercel.app, etc.
             return r"https://.*\.vercel\.app"
         return None
 

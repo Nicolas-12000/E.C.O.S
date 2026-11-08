@@ -56,8 +56,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-if _cors_regex and settings.env == "production":
-    logger.info("CORS allow_origin_regex enabled for Vercel deployments")
+if _cors_regex:
+    logger.info("CORS allow_origin_regex=%s", _cors_regex)
 
 app.include_router(api_router)
 
