@@ -178,19 +178,6 @@ export function GlobalChatBubble() {
                 }
               >
                 {renderContent(msg.content)}
-
-                {msg.sources && msg.sources.length > 0 && (
-                  <div className="mt-2.5 pt-2" style={{ borderTop: "1px solid #E5E2DC", opacity: 0.85 }}>
-                    <p className="text-[9px] uppercase tracking-wider mb-1.5 font-semibold" style={{ color: "#9CA3AF" }}>📎 Fuentes</p>
-                    <div className="flex flex-wrap gap-1">
-                      {msg.sources.map((src, i) => (
-                        <span key={i} className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded" style={{ backgroundColor: "#FFFFFF", border: "1px solid #E5E2DC", color: "#6C7278" }}>
-                          {src.source_type === "data" ? "📊" : "📄"} {src.title}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                )}
               </div>
             </div>
           ))}

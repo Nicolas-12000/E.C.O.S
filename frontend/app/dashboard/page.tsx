@@ -43,8 +43,8 @@ const MUNICIPIOS = [
   { code: "05579", name: "Puerto Triunfo" },
   { code: "68686", name: "San Gil" },
   { code: "25258", name: "Tocaima" },
-  { code: "76760", name: "Cali" },
-  { code: "11110", name: "Bogotá D.C." },
+  { code: "76001", name: "Cali" },
+  { code: "11001", name: "Bogotá D.C." },
   { code: "13130", name: "Cartagena" },
   { code: "54540", name: "Cúcuta" },
 ]
@@ -144,8 +144,9 @@ const DEPTO_TO_MUNICIPIO: Record<string, string> = {
   "70": "70708", // Sucre → Toluviejo
   "68": "68686", // Santander → San Gil
   "25": "25258", // Cundinamarca → Tocaima
-  "76": "76760", // Valle del Cauca → Cali
-  "11": "11110", // Bogotá D.C. → Bogotá
+  "76": "76001", // Valle del Cauca → Cali
+  "11": "11001", // Bogotá D.C.
+  "52": "52001", // Nariño → Pasto
   "13": "13130", // Bolívar → Cartagena
   "54": "54540", // Norte de Santander → Cúcuta
 }

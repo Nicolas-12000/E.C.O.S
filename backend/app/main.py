@@ -1,3 +1,6 @@
+import logging
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -5,9 +8,27 @@ from app.core.config import settings
 from app.core.logging import setup_logging
 
 setup_logging(settings.debug)
+logger = logging.getLogger(__name__)
 
-# Importa el router correspondiente según el entorno
-if settings.env == "production":
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    grpc_task = None
+    if settings.grpc_port > 0:
+        try:
+            from app.grpc.serve import serve_grpc_async
+
+            grpc_task = await serve_grpc_async(settings.grpc_port)
+            logger.info("gRPC listening on port %s", settings.grpc_port)
+        except Exception as exc:
+            logger.warning("gRPC not started: %s", exc)
+    yield
+    if grpc_task:
+        await grpc_task.stop(grace=None)
+
+
+# Producción liviana salvo ECOS_FULL_API=true (Render 512MB vs plan con más RAM).
+if settings.env == "production" and not settings.enable_full_api:
     from app.api.router_prod import api_router
 else:
     from app.api.router import api_router
@@ -17,6 +38,7 @@ app = FastAPI(
     description="Early Control and Observation System — API de alerta temprana epidemiológica",
     version="0.3.0",
     debug=settings.debug,
+    lifespan=lifespan,
 )
 
 # CORS — permite que el frontend Next.js se conecte
@@ -40,6 +62,7 @@ def root():
         "docs": "/docs",
         "endpoints": [
             "/health",
+            "/ws/alerts",
             "/api/v3/predict",
             "/api/v3/history",
             "/api/v3/signals",

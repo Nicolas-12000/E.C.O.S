@@ -1,4 +1,7 @@
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://127.0.0.1:8000"
+/** Vacío en Vercel con `rewrites` en next.config (mismo origen). Local: 8000. */
+export const API_BASE =
+  (process.env.NEXT_PUBLIC_API_URL && process.env.NEXT_PUBLIC_API_URL.replace(/\/$/, "")) ||
+  (typeof window !== "undefined" ? "" : "http://127.0.0.1:8000")
 
 interface FetchError extends Error {
   info?: unknown;

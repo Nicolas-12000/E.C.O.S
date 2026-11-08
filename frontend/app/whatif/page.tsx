@@ -17,8 +17,13 @@ const DISEASES = ["dengue", "malaria", "zika", "chikungunya"]
 
 const ADJUSTMENT_KEYS = [
   { key: "vaccination_coverage_pct", label: "Cobertura vacunal (Δ %)", min: -20, max: 30, step: 1 },
+  { key: "mobility_in", label: "Movilidad entrada (Δ)", min: -500, max: 500, step: 25 },
+  { key: "mobility_out", label: "Movilidad salida (Δ)", min: -500, max: 500, step: 25 },
   { key: "mobility_index", label: "Índice movilidad (Δ)", min: -0.5, max: 0.5, step: 0.05 },
+  { key: "trends_score", label: "Google Trends (Δ)", min: -30, max: 30, step: 1 },
+  { key: "rss_mentions", label: "Menciones en noticias (Δ)", min: -20, max: 50, step: 1 },
   { key: "precipitation_mm", label: "Precipitación (Δ mm)", min: -50, max: 100, step: 5 },
+  { key: "temp_avg_c", label: "Temperatura media (Δ °C)", min: -5, max: 5, step: 0.5 },
 ]
 
 interface WhatIfResponse {
@@ -86,7 +91,8 @@ export default function WhatIfPage() {
       </Badge>
       <h1 className="text-3xl font-bold text-(--color-primary) mb-2">Simulación de escenarios</h1>
       <p className="text-(--color-secondary) mb-8">
-        Ajusta variables exógenas y compara el total pronosticado vs. la línea base del modelo servido.
+        Ajusta variables exógenas (vacunación, movilidad, clima, trends, noticias) y compara contra la
+        línea base del modelo híbrido cuando exista.
       </p>
 
       <div className="space-y-6 rounded-lg border border-(--color-border) bg-(--color-surface) p-6 mb-8">

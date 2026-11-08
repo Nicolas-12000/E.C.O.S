@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -7,6 +8,9 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 class Settings(BaseSettings):
     env: str = "dev"
     debug: bool = True
+    # En Render: false = router RAG (512MB). true = API completa (what-if, pronóstico, movilidad…).
+    enable_full_api: bool = Field(default=False, validation_alias="ECOS_FULL_API")
+    grpc_port: int = Field(default=0, validation_alias="GRPC_PORT")  # Render: 0 (solo $PORT)
 
     # Groq (LLM para RAG)
     groq_api_key: str = ""
@@ -40,7 +44,15 @@ class Settings(BaseSettings):
             return [origin.strip() for origin in cors_env.split(",") if origin.strip()]
         return self.cors_origins
 
-    model_config = SettingsConfigDict(env_file=str(REPO_ROOT / ".env"), env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=str(REPO_ROOT / ".env"),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    @property
+    def lite_production(self) -> bool:
+        return self.env == "production" and not self.enable_full_api
 
     def resolved_database_url(self) -> str | None:
         """Return the first available database URL, or None."""

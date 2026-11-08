@@ -6,8 +6,13 @@ the Supabase database for vector similarity.
 
 import logging
 from typing import List, Dict, Any, Tuple
-from sentence_transformers import SentenceTransformer
+
 from app.core.db import get_db_connection
+
+try:
+    from sentence_transformers import SentenceTransformer
+except ImportError:  # optional — use requirements-dev.txt without heavy transformers stack
+    SentenceTransformer = None  # type: ignore[misc, assignment]
 
 logger = logging.getLogger(__name__)
 
@@ -16,9 +21,11 @@ _model = None
 
 def get_model():
     global _model
+    if SentenceTransformer is None:
+        raise ImportError("sentence-transformers not installed (pip install sentence-transformers)")
     if _model is None:
         logger.info("Loading sentence-transformer model: all-MiniLM-L6-v2")
-        _model = SentenceTransformer('all-MiniLM-L6-v2')
+        _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
 def available() -> bool:

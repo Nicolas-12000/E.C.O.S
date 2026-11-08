@@ -167,6 +167,47 @@ def fetch_run_alerts(
             return [dict(r) for r in cur.fetchall()]
 
 
+def fetch_municipio_points(
+    municipio_code: str,
+    disease: str,
+    weeks_ahead: int = 4,
+    model_family: str | None = None,
+) -> list[dict[str, Any]] | None:
+    """Última corrida guardada para un municipio (prod free sin joblib)."""
+    run = get_latest_run()
+    if not run:
+        return None
+    filters = [
+        "p.run_id = %s",
+        "p.municipio_code = %s",
+        "p.disease = %s",
+        "p.horizon_weeks <= %s",
+    ]
+    params: list[Any] = [run["run_id"], municipio_code, disease, weeks_ahead]
+    if model_family:
+        filters.append("p.model_family = %s")
+        params.append(model_family)
+    query = f"""
+        SELECT
+            p.municipio_code, p.departamento_code, p.disease,
+            p.epi_year, p.epi_week, p.week_start_date,
+            p.predicted_cases, p.outbreak_flag, p.outbreak_threshold,
+            p.endemic_risk, p.horizon_weeks, p.model_family
+        FROM public.prediction_points p
+        WHERE {" AND ".join(filters)}
+        ORDER BY p.horizon_weeks
+    """
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(query, tuple(params))
+                rows = [dict(r) for r in cur.fetchall()]
+                return rows or None
+    except Exception as exc:
+        logger.warning("fetch_municipio_points: %s", exc)
+        return None
+
+
 def sync_legacy_predictions_table(
     run_id: uuid.UUID, horizon_weeks: int = 1, model_family: str = "hybrid"
 ) -> None:

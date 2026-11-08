@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package ecos.v1;
+
+// Contract-first: mismo contrato que POST /api/v3/whatif (payload binario vía gRPC).
+service ForecastService {
+  rpc WhatIf(WhatIfRequest) returns (WhatIfResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);
+}
+
+message HealthRequest {}
+
+message HealthResponse {
+  string status = 1;
+}
+
+message WhatIfRequest {
+  string municipio_code = 1;
+  string disease = 2;
+  int32 weeks_ahead = 3;
+  map<string, double> adjustments = 4;
+}
+
+message PredictionPoint {
+  int32 epi_year = 1;
+  int32 epi_week = 2;
+  double predicted_cases = 3;
+  bool outbreak_flag = 4;
+}
+
+message WhatIfResponse {
+  repeated PredictionPoint original = 1;
+  repeated PredictionPoint adjusted = 2;
+  double delta_total = 3;
+  string model_family = 4;
+}

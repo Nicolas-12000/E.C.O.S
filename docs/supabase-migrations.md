@@ -14,12 +14,30 @@ Los datos operativos ya cargados (`fact_core_weekly`, dimensiones, etc.) **no se
 | `supabase/migrations/0003_prediction_model_family.sql` | Columna `model_family` (naive/ridge/hybrid) | 0002 |
 | `supabase/migrations/0004_fact_core_climate_anomaly.sql` | Columnas anomalía clima + humedad en `fact_core_weekly` | init_02 |
 | `supabase/migrations/0005_whatif_scenarios.sql` | Tabla `whatif_scenarios` (simulaciones guardadas) | — |
+| `supabase/migrations/0006_dim_departamentos_coords.sql` | Lat/lon en `dim_departamentos` (mapa movilidad dashboard) | init_01 |
 
-Si la base **ya existe** en Supabase (tu caso), aplica solo lo que falte:
+Si la base **ya existe** en Supabase (tu caso), aplica todo el directorio `supabase/migrations` con **un comando**:
 
 ```bash
-# Desde la raíz del repo, con SUPABASE_DB_URL en .env
-psql "$SUPABASE_DB_URL" -f supabase/migrations/0002_prediction_runs.sql
+# Desde la raíz del repo (lee SUPABASE_DB_URL de .env)
+# Con venv activado (psycopg ya instalado):
+python scripts/migrate_supabase.py
+
+# O el wrapper (usa psql si existe; si no, llama al script Python):
+bash scripts/migrate_supabase.sh
+```
+
+Base vacía (dimensiones + hechos + migraciones):
+
+```bash
+bash scripts/migrate_supabase.sh --with-init
+```
+
+Equivalente manual (sin script):
+
+```bash
+set -a && source .env && set +a
+for f in supabase/migrations/*.sql; do psql "$SUPABASE_DB_URL" -v ON_ERROR_STOP=1 -f "$f"; done
 ```
 
 `0001` solo si aún no tienes `public.predictions`.

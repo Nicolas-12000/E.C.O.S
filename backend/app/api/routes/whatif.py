@@ -7,8 +7,8 @@ from app.schemas.epidemiology import (
     WhatIfScenarioListResponse,
     WhatIfScenarioItem,
 )
-from app.services.prediction import predict_cases
 from app.services.epidemiology import VALID_DISEASES
+from app.services.prediction_resolve import resolve_predictions
 from app.services.whatif_store import list_scenarios, save_scenario
 
 router = APIRouter()
@@ -47,15 +47,17 @@ def what_if(req: WhatIfRequest):
         raise HTTPException(status_code=422, detail=f"disease must be one of {sorted(VALID_DISEASES)}")
 
     try:
-        original = predict_cases(req.municipio_code, req.disease, weeks_ahead=req.weeks_ahead)
-        adjusted = predict_cases(
+        original, _ = resolve_predictions(req.municipio_code, req.disease, weeks_ahead=req.weeks_ahead)
+        adjusted, _ = resolve_predictions(
             req.municipio_code,
             req.disease,
             weeks_ahead=req.weeks_ahead,
             adjustments=req.adjustments,
         )
+    except ValueError as e:
+        raise HTTPException(status_code=503, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
     total_orig = sum(p["predicted_cases"] for p in original)
     total_adj = sum(p["predicted_cases"] for p in adjusted)

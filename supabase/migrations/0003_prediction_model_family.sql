@@ -1,4 +1,4 @@
--- Allow naive / ridge / hybrid points in the same weekly run
+-- Allow naive / ridge / hybrid points in the same weekly run (idempotent re-run safe)
 
 ALTER TABLE public.prediction_points
     ADD COLUMN IF NOT EXISTS model_family TEXT NOT NULL DEFAULT 'hybrid';
@@ -6,6 +6,15 @@ ALTER TABLE public.prediction_points
 ALTER TABLE public.prediction_points
     DROP CONSTRAINT IF EXISTS prediction_points_run_id_municipio_code_disease_horizon_wee_key;
 
-ALTER TABLE public.prediction_points
-    ADD CONSTRAINT prediction_points_run_unique
-    UNIQUE (run_id, municipio_code, disease, horizon_weeks, model_family);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'prediction_points_run_unique'
+          AND conrelid = 'public.prediction_points'::regclass
+    ) THEN
+        ALTER TABLE public.prediction_points
+            ADD CONSTRAINT prediction_points_run_unique
+            UNIQUE (run_id, municipio_code, disease, horizon_weeks, model_family);
+    END IF;
+END $$;

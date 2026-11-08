@@ -1,0 +1,10 @@
+# Render free tier (512 MB): 1 proceso asyncio — REST + WebSocket multiplexados.
+# HTTP/2 hacia el usuario: termina TLS en Render (borde h2/h3).
+# El contenedor recibe HTTP/1.1 del proxy; Hypercorn mantiene ASGI nativo y WS.
+
+workers = 1
+worker_class = "asyncio"
+keep_alive_timeout = 5
+graceful_timeout = 25
+startup_timeout = 180
+backlog = 128

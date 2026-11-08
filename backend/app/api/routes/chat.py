@@ -19,7 +19,7 @@ from app.services.epidemiology import VALID_DISEASES, get_history, get_last_know
 from app.services import rag
 from app.services.weather import fetch_open_meteo_weekly
 from app.core.db import get_db_connection
-from app.core.epi_date import find_date_in_text
+from app.core.epi_date import find_date_in_text, resolve_epi_date
 
 # Importación opcional de predict_cases (evita cargar dependencias pesadas de ML)
 try:
@@ -40,6 +40,14 @@ router = APIRouter()
 
 # In-memory chat history cache (session_id -> list of messages)
 chat_history_cache: Dict[str, List[Dict[str, str]]] = {}
+# Identical questions reuse the last answer for 30 minutes (no second Groq call).
+_answer_cache: Dict[str, dict] = {}
+_ANSWER_CACHE_TTL_S = 30 * 60
+
+_MESES_ES = (
+    "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -76,6 +84,20 @@ REGION_KEYWORDS = {
     "region", "región", "pacifico", "pacífico", "caribe", "andina",
     "orinoquia", "orinoquía", "amazonia", "amazonía", "insular",
 }
+
+MOBILITY_KEYWORDS = {
+    "movilidad", "flujo", "flujos", "transporte", "pasajeros", "viajeros",
+    "contag", "propag", "propagación", "od ", "origen-destino",
+}
+
+OUTLOOK_KEYWORDS = (
+    "estará", "estara", "cómo estará", "como estara", "cómo va", "como va",
+    "va a estar", "va a aumentar", "va a disminuir", "aumentará", "aumentara",
+    "disminuirá", "disminuira", "pronóstico", "pronostico", "predicción", "prediccion",
+    "hoy", "esta semana", "ahora",
+)
+
+TODAY_HINTS = ("hoy", "ahora", "esta semana", "actualmente", "estará", "estara")
 
 
 # ---------------------------------------------------------------------------
@@ -120,337 +142,368 @@ def _query_climate_by_depto(departamento_code: str) -> dict | None:
     }
 
 
-def _query_cases_by_depto(departamento_code: str, disease: str | None) -> dict | None:
-    """Casos históricos completos por departamento, opcionalmente filtrado por enfermedad."""
-    disease_filter = "AND disease = %s" if disease else ""
-    params = (departamento_code, disease) if disease else (departamento_code,)
+def _weekly_cases_cte(from_join: str, where_sql: str) -> str:
+    """CTE: one row per epi week with department/region/national totals (municipio-grain rolled up)."""
+    return f"""
+        WITH weekly AS (
+            SELECT epi_year, epi_week,
+                   MIN(week_start_date) AS week_start_date,
+                   SUM(cases_total)::bigint AS cases_week
+            FROM {from_join}
+            WHERE {where_sql}
+            GROUP BY epi_year, epi_week
+        )
+    """
 
-    rows = _db_execute(f"""
-        SELECT SUM(cases_total), MIN(week_start_date), MAX(week_start_date), COUNT(*)
-        FROM public.fact_core_weekly
-        WHERE departamento_code = %s {disease_filter}
-    """, params)
-    if not rows or rows[0][0] is None:
+
+def _stats_from_weekly_values(all_cases: list[int]) -> dict:
+    if not all_cases:
+        return {}
+    return {
+        "min_weekly": min(all_cases),
+        "max_weekly": max(all_cases),
+        "avg_weekly": round(statistics.mean(all_cases), 2),
+        "median_weekly": round(statistics.median(all_cases), 2),
+        "p75_weekly": _percentile(all_cases, 75),
+        "p90_weekly": _percentile(all_cases, 90),
+    }
+
+
+def _query_cases_bundle(from_join: str, where_sql: str, params: tuple) -> dict | None:
+    """Shared case analytics: totals and stats on true weekly sums (not per-municipio rows)."""
+    cte = _weekly_cases_cte(from_join, where_sql)
+
+    header = _db_execute(
+        f"""{cte}
+        SELECT COALESCE(SUM(cases_week), 0), MIN(week_start_date), MAX(week_start_date), COUNT(*)
+        FROM weekly
+        """,
+        params,
+    )
+    if not header or header[0][0] is None:
         return None
-    total_hist, min_date, max_date, n_weeks = rows[0]
+    total_hist, min_date, max_date, n_weeks = header[0]
 
-    year_rows = _db_execute(f"""
-        SELECT epi_year, SUM(cases_total), AVG(cases_total), MAX(cases_total)
-        FROM public.fact_core_weekly
-        WHERE departamento_code = %s {disease_filter}
-        GROUP BY epi_year ORDER BY epi_year
-    """, params)
-    by_year = {}
-    year_data = []
-    for r in year_rows:
-        by_year[r[0]] = {
+    year_rows = _db_execute(
+        f"""{cte}
+        SELECT epi_year, SUM(cases_week), AVG(cases_week), MAX(cases_week)
+        FROM weekly GROUP BY epi_year ORDER BY epi_year
+        """,
+        params,
+    )
+    by_year = {
+        r[0]: {
             "total": int(r[1]),
             "avg_weekly": round(float(r[2]), 2) if r[2] else 0,
-            "max_weekly": int(r[3]) if r[3] else 0
+            "max_weekly": int(r[3]) if r[3] else 0,
         }
-        year_data.append((r[0], int(r[1])))
-    
+        for r in year_rows
+    }
     peak_year = max(by_year, key=lambda y: by_year[y]["total"]) if by_year else None
 
-    if disease is None:
-        dis_rows = _db_execute("""
-            SELECT disease, SUM(cases_total), AVG(cases_total)
-            FROM public.fact_core_weekly
-            WHERE departamento_code = %s
-            GROUP BY disease ORDER BY 2 DESC
-        """, (departamento_code,))
-        by_disease = {r[0]: {"total": int(r[1]), "avg_weekly": round(float(r[2]), 2) if r[2] else 0} for r in dis_rows}
-    else:
-        by_disease = {}
+    recent_rows = _db_execute(
+        f"""{cte}
+        SELECT epi_year, epi_week, cases_week, week_start_date
+        FROM weekly ORDER BY week_start_date DESC LIMIT 12
+        """,
+        params,
+    )
+    recent = [
+        {"year": r[0], "week": r[1], "cases": int(r[2]), "date": str(r[3])} for r in recent_rows
+    ]
 
-    recent_rows = _db_execute(f"""
-        SELECT epi_year, epi_week, SUM(cases_total), week_start_date
-        FROM public.fact_core_weekly
-        WHERE departamento_code = %s {disease_filter}
-        GROUP BY epi_year, epi_week, week_start_date
-        ORDER BY week_start_date DESC LIMIT 12
-    """, params)
-    recent = [{"year": r[0], "week": r[1], "cases": int(r[2]), "date": str(r[3])} for r in recent_rows]
-    
-    # Obtener datos estacionales (mismos meses en años anteriores)
-    seasonal_comparison = {}
+    seasonal_comparison: dict = {}
     if recent:
         latest_epi_week = recent[0]["week"]
-        # Consultar casos de las mismas semanas en años anteriores
-        seasonal_params = list(params)  # Copiar params existentes
-        seasonal_params.extend([max(1, latest_epi_week - 4), latest_epi_week])
-        seasonal_rows = _db_execute(f"""
-            SELECT epi_year, epi_week, SUM(cases_total)
-            FROM public.fact_core_weekly
-            WHERE departamento_code = %s {disease_filter}
-            AND epi_week BETWEEN %s AND %s
-            GROUP BY epi_year, epi_week
+        seasonal_params = tuple(list(params) + [max(1, latest_epi_week - 4), latest_epi_week])
+        seasonal_rows = _db_execute(
+            f"""{cte}
+            SELECT epi_year, epi_week, cases_week
+            FROM weekly
+            WHERE epi_week BETWEEN %s AND %s
             ORDER BY epi_year DESC, epi_week
-        """, tuple(seasonal_params))
-        
+            """,
+            seasonal_params,
+        )
         for r in seasonal_rows:
-            if r[0] not in seasonal_comparison:
-                seasonal_comparison[r[0]] = []
-            seasonal_comparison[r[0]].append({"week": r[1], "cases": int(r[2])})
+            seasonal_comparison.setdefault(r[0], []).append({"week": r[1], "cases": int(r[2])})
 
-    # Calcular estadísticas básicas
-    all_weeks = _db_execute(f"""
-        SELECT SUM(cases_total)
-        FROM public.fact_core_weekly
-        WHERE departamento_code = %s {disease_filter}
-        GROUP BY epi_year, epi_week
-    """, params)
-    all_cases = [int(r[0]) for r in all_weeks if r[0] is not None]
-    stats = {}
-    if all_cases:
-        stats = {
-            "min_weekly": min(all_cases),
-            "max_weekly": max(all_cases),
-            "avg_weekly": round(statistics.mean(all_cases), 2),
-            "median_weekly": round(statistics.median(all_cases), 2),
-            "p75_weekly": _percentile(all_cases, 75),
-            "p90_weekly": _percentile(all_cases, 90)
-        }
+    week_vals = _db_execute(f"{cte} SELECT cases_week FROM weekly", params)
+    all_cases = [int(r[0]) for r in week_vals if r[0] is not None]
 
     return {
         "total_historical": int(total_hist),
         "by_year": by_year,
-        "by_disease": by_disease,
         "peak_year": peak_year,
         "peak_cases": by_year.get(peak_year, {}).get("total", 0) if peak_year else 0,
         "recent_weeks": recent,
         "seasonal_comparison": seasonal_comparison,
-        "statistics": stats,
+        "statistics": _stats_from_weekly_values(all_cases),
         "data_from": str(min_date),
         "data_to": str(max_date),
-        "n_weeks": n_weeks,
+        "n_weeks": int(n_weeks),
+    }
+
+
+def _query_cases_by_depto(departamento_code: str, disease: str | None) -> dict | None:
+    """Casos históricos por departamento (agregados por semana epidemiológica)."""
+    if disease:
+        where = "departamento_code = %s AND disease = %s"
+        params = (departamento_code, disease)
+    else:
+        where = "departamento_code = %s"
+        params = (departamento_code,)
+
+    bundle = _query_cases_bundle("public.fact_core_weekly", where, params)
+    if not bundle:
+        return None
+
+    if disease is None:
+        dis_rows = _db_execute(
+            """
+            SELECT disease, SUM(cases_total)
+            FROM public.fact_core_weekly
+            WHERE departamento_code = %s
+            GROUP BY disease ORDER BY 2 DESC
+            """,
+            (departamento_code,),
+        )
+        bundle["by_disease"] = {r[0]: {"total": int(r[1])} for r in dis_rows}
+    else:
+        bundle["by_disease"] = {}
+
+    return bundle
+
+
+def _query_mobility_by_depto(departamento_code: str) -> dict | None:
+    """
+    Movilidad intermunicipal agregada al departamento (una fila por municipio×semana, luego suma).
+    Alineado con fact_core_weekly / mapa OD del dashboard.
+    """
+    latest = _db_execute(
+        """
+        WITH mob AS (
+            SELECT municipio_code, epi_year, epi_week,
+                   MAX(week_start_date) AS week_start_date,
+                   MAX(mobility_in) AS mobility_in,
+                   MAX(mobility_out) AS mobility_out,
+                   MAX(mobility_index) AS mobility_index
+            FROM public.fact_core_weekly
+            WHERE departamento_code = %s
+              AND (mobility_in IS NOT NULL OR mobility_out IS NOT NULL)
+            GROUP BY municipio_code, epi_year, epi_week
+        ),
+        weekly AS (
+            SELECT epi_year, epi_week, MAX(week_start_date) AS week_start_date,
+                   SUM(COALESCE(mobility_in, 0))::bigint AS mobility_in,
+                   SUM(COALESCE(mobility_out, 0))::bigint AS mobility_out,
+                   AVG(mobility_index) AS mobility_index
+            FROM mob
+            GROUP BY epi_year, epi_week
+        )
+        SELECT mobility_in, mobility_out, mobility_index, week_start_date, epi_year, epi_week
+        FROM weekly
+        ORDER BY week_start_date DESC
+        LIMIT 1
+        """,
+        (departamento_code,),
+    )
+    if not latest:
+        return None
+    row = latest[0]
+    top_in = _db_execute(
+        """
+        WITH mob AS (
+            SELECT municipio_code, epi_year, epi_week, week_start_date,
+                   MAX(mobility_in) AS mobility_in
+            FROM public.fact_core_weekly
+            WHERE departamento_code = %s AND mobility_in IS NOT NULL
+            GROUP BY municipio_code, epi_year, epi_week, week_start_date
+        ),
+        latest AS (
+            SELECT week_start_date FROM mob ORDER BY week_start_date DESC LIMIT 1
+        )
+        SELECT m.municipio_code, SUM(m.mobility_in)::bigint
+        FROM mob m
+        INNER JOIN latest l ON m.week_start_date = l.week_start_date
+        GROUP BY m.municipio_code
+        ORDER BY 2 DESC
+        LIMIT 3
+        """,
+        (departamento_code,),
+    )
+    return {
+        "mobility_in": int(row[0] or 0),
+        "mobility_out": int(row[1] or 0),
+        "mobility_index": round(float(row[2] or 0), 2),
+        "week_start_date": str(row[3]),
+        "epi_year": int(row[4]),
+        "epi_week": int(row[5]),
+        "top_entry_municipios": [(str(r[0]), int(r[1])) for r in top_in],
     }
 
 
 def _query_national_summary(disease: str | None = None) -> dict | None:
-    """Total de casos a nivel nacional."""
-    disease_filter = "WHERE disease = %s" if disease else ""
-    params = (disease,) if disease else ()
-
-    rows = _db_execute(f"""
-        SELECT SUM(cases_total), MIN(week_start_date), MAX(week_start_date), COUNT(DISTINCT CONCAT(epi_year, '-', epi_week))
-        FROM public.fact_core_weekly {disease_filter}
-    """, params)
-    if not rows or rows[0][0] is None:
-        return None
-    total_historical, min_date, max_date, n_weeks = rows[0]
-
-    year_rows = _db_execute(f"""
-        SELECT epi_year, SUM(cases_total), AVG(cases_total), MAX(cases_total)
-        FROM public.fact_core_weekly {disease_filter}
-        GROUP BY epi_year ORDER BY epi_year
-    """, params)
-    by_year = {}
-    for r in year_rows:
-        by_year[r[0]] = {
-            "total": int(r[1]),
-            "avg_weekly": round(float(r[2]), 2) if r[2] else 0,
-            "max_weekly": int(r[3]) if r[3] else 0
-        }
-
-    peak_year = max(by_year, key=lambda y: by_year[y]["total"]) if by_year else None
-    peak_cases = by_year.get(peak_year, {}).get("total", 0) if peak_year else 0
-
-    if not disease:
-        dis_rows = _db_execute("""
-            SELECT disease, SUM(cases_total), AVG(cases_total)
-            FROM public.fact_core_weekly
-            GROUP BY disease ORDER BY 2 DESC
-        """)
-        by_disease = {r[0]: {"total": int(r[1]), "avg_weekly": round(float(r[2]), 2) if r[2] else 0} for r in dis_rows}
+    """Total de casos a nivel nacional (totales semanales, no filas municipio)."""
+    if disease:
+        where = "disease = %s"
+        params = (disease,)
+        disease_filter = "WHERE disease = %s"
     else:
-        by_disease = {}
+        where = "TRUE"
+        params = ()
+        disease_filter = ""
 
-    recent_rows = _db_execute(f"""
-        SELECT epi_year, epi_week, SUM(cases_total), week_start_date
-        FROM public.fact_core_weekly {disease_filter}
-        GROUP BY epi_year, epi_week, week_start_date
-        ORDER BY week_start_date DESC LIMIT 12
-    """, params)
-    recent = [{"year": r[0], "week": r[1], "cases": int(r[2]), "date": str(r[3])} for r in recent_rows]
+    bundle = _query_cases_bundle("public.fact_core_weekly", where, params)
+    if not bundle:
+        return None
 
-    seasonal_comparison = {}
-    if recent:
-        latest_epi_week = recent[0]["week"]
-        seasonal_params = list(params) 
-        seasonal_params.extend([max(1, latest_epi_week - 4), latest_epi_week])
-        if disease_filter:
-            seasonal_filter = f"AND epi_week BETWEEN %s AND %s"
-            full_query = f"{disease_filter} {seasonal_filter}"
-        else:
-            seasonal_filter = f"WHERE epi_week BETWEEN %s AND %s"
-            full_query = seasonal_filter
-            
-        seasonal_rows = _db_execute(f"""
-            SELECT epi_year, epi_week, SUM(cases_total)
-            FROM public.fact_core_weekly {full_query}
-            GROUP BY epi_year, epi_week
-            ORDER BY epi_year DESC, epi_week
-        """, tuple(seasonal_params))
-        
-        for r in seasonal_rows:
-            if r[0] not in seasonal_comparison:
-                seasonal_comparison[r[0]] = []
-            seasonal_comparison[r[0]].append({"week": r[1], "cases": int(r[2])})
-
-    all_weeks = _db_execute(f"""
-        SELECT SUM(cases_total)
-        FROM public.fact_core_weekly {disease_filter}
-        GROUP BY epi_year, epi_week
-    """, params)
-    all_cases = [int(r[0]) for r in all_weeks if r[0] is not None]
-    stats = {}
-    if all_cases:
-        stats = {
-            "min_weekly": min(all_cases),
-            "max_weekly": max(all_cases),
-            "avg_weekly": round(statistics.mean(all_cases), 2),
-            "median_weekly": round(statistics.median(all_cases), 2),
-            "p75_weekly": _percentile(all_cases, 75),
-            "p90_weekly": _percentile(all_cases, 90)
-        }
-
-    top_rows = _db_execute(f"""
+    top_rows = _db_execute(
+        f"""
         SELECT departamento_code, SUM(cases_total)
         FROM public.fact_core_weekly {disease_filter}
         GROUP BY departamento_code ORDER BY 2 DESC LIMIT 5
-    """, params)
+        """,
+        params,
+    )
+    bundle["top_deptos"] = [(r[0], int(r[1])) for r in top_rows]
 
-    return {
-        "total_historical": int(total_historical),
-        "data_from": str(min_date),
-        "data_to": str(max_date),
-        "n_weeks": n_weeks,
-        "top_deptos": [(r[0], int(r[1])) for r in top_rows],
-        "by_year": by_year,
-        "peak_year": peak_year,
-        "peak_cases": peak_cases,
-        "by_disease": by_disease,
-        "recent_weeks": recent,
-        "seasonal_comparison": seasonal_comparison,
-        "statistics": stats,
-    }
+    if not disease:
+        dis_rows = _db_execute(
+            """
+            SELECT disease, SUM(cases_total)
+            FROM public.fact_core_weekly
+            GROUP BY disease ORDER BY 2 DESC
+            """
+        )
+        bundle["by_disease"] = {r[0]: {"total": int(r[1])} for r in dis_rows}
+    else:
+        bundle["by_disease"] = {}
+
+    return bundle
 
 
 def _query_region_summary(region_norm: str, disease: str | None = None) -> dict | None:
-    """Casos por región (usando dim_departamentos.region_norm)."""
-    disease_filter = "AND f.disease = %s" if disease else ""
-    params = (region_norm, disease) if disease else (region_norm,)
+    """Casos por región (dim_departamentos.region_norm), agregados por semana."""
+    from_join = (
+        "public.fact_core_weekly f "
+        "INNER JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code"
+    )
+    if disease:
+        where = "UPPER(d.region_norm) LIKE UPPER(%s) AND f.disease = %s"
+        params = (region_norm, disease)
+    else:
+        where = "UPPER(d.region_norm) LIKE UPPER(%s)"
+        params = (region_norm,)
 
-    rows = _db_execute(f"""
-        SELECT SUM(f.cases_total), MIN(f.week_start_date), MAX(f.week_start_date), COUNT(DISTINCT CONCAT(f.epi_year, '-', f.epi_week))
-        FROM public.fact_core_weekly f
-        JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code
-        WHERE UPPER(d.region_norm) LIKE UPPER(%s) {disease_filter}
-    """, params)
-    if not rows or rows[0][0] is None:
+    # Weekly CTE with join — use f.* columns in GROUP BY
+    def region_cte() -> str:
+        return f"""
+        WITH weekly AS (
+            SELECT f.epi_year, f.epi_week,
+                   MIN(f.week_start_date) AS week_start_date,
+                   SUM(f.cases_total)::bigint AS cases_week
+            FROM {from_join}
+            WHERE {where}
+            GROUP BY f.epi_year, f.epi_week
+        )
+        """
+
+    header = _db_execute(
+        f"""{region_cte()}
+        SELECT COALESCE(SUM(cases_week), 0), MIN(week_start_date), MAX(week_start_date), COUNT(*)
+        FROM weekly
+        """,
+        params,
+    )
+    if not header or header[0][0] is None:
         return None
-    total_historical, min_date, max_date, n_weeks = rows[0]
+    total_hist, min_date, max_date, n_weeks = header[0]
 
-    year_rows = _db_execute(f"""
-        SELECT f.epi_year, SUM(f.cases_total), AVG(f.cases_total), MAX(f.cases_total)
-        FROM public.fact_core_weekly f
-        JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code
-        WHERE UPPER(d.region_norm) LIKE UPPER(%s) {disease_filter}
-        GROUP BY f.epi_year ORDER BY f.epi_year
-    """, params)
-    by_year = {}
-    for r in year_rows:
-        by_year[r[0]] = {
+    year_rows = _db_execute(
+        f"""{region_cte()}
+        SELECT epi_year, SUM(cases_week), AVG(cases_week), MAX(cases_week)
+        FROM weekly GROUP BY epi_year ORDER BY epi_year
+        """,
+        params,
+    )
+    by_year = {
+        r[0]: {
             "total": int(r[1]),
             "avg_weekly": round(float(r[2]), 2) if r[2] else 0,
-            "max_weekly": int(r[3]) if r[3] else 0
+            "max_weekly": int(r[3]) if r[3] else 0,
         }
-
+        for r in year_rows
+    }
     peak_year = max(by_year, key=lambda y: by_year[y]["total"]) if by_year else None
-    peak_cases = by_year.get(peak_year, {}).get("total", 0) if peak_year else 0
+
+    recent_rows = _db_execute(
+        f"""{region_cte()}
+        SELECT epi_year, epi_week, cases_week, week_start_date
+        FROM weekly ORDER BY week_start_date DESC LIMIT 12
+        """,
+        params,
+    )
+    recent = [
+        {"year": r[0], "week": r[1], "cases": int(r[2]), "date": str(r[3])} for r in recent_rows
+    ]
+
+    seasonal_comparison: dict = {}
+    if recent:
+        latest_epi_week = recent[0]["week"]
+        seasonal_params = tuple(list(params) + [max(1, latest_epi_week - 4), latest_epi_week])
+        seasonal_rows = _db_execute(
+            f"""{region_cte()}
+            SELECT epi_year, epi_week, cases_week
+            FROM weekly
+            WHERE epi_week BETWEEN %s AND %s
+            ORDER BY epi_year DESC, epi_week
+            """,
+            seasonal_params,
+        )
+        for r in seasonal_rows:
+            seasonal_comparison.setdefault(r[0], []).append({"week": r[1], "cases": int(r[2])})
+
+    week_vals = _db_execute(f"{region_cte()} SELECT cases_week FROM weekly", params)
+    all_cases = [int(r[0]) for r in week_vals if r[0] is not None]
+
+    disease_filter = "AND f.disease = %s" if disease else ""
+    dep_rows = _db_execute(
+        f"""
+        SELECT f.departamento_code, SUM(f.cases_total)
+        FROM {from_join}
+        WHERE UPPER(d.region_norm) LIKE UPPER(%s) {disease_filter}
+        GROUP BY f.departamento_code ORDER BY 2 DESC LIMIT 5
+        """,
+        params,
+    )
 
     if disease is None:
-        dis_rows = _db_execute(f"""
-            SELECT f.disease, SUM(f.cases_total), AVG(f.cases_total)
-            FROM public.fact_core_weekly f
-            JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code
+        dis_rows = _db_execute(
+            f"""
+            SELECT f.disease, SUM(f.cases_total)
+            FROM {from_join}
             WHERE UPPER(d.region_norm) LIKE UPPER(%s)
             GROUP BY f.disease ORDER BY 2 DESC
-        """, (region_norm,))
-        by_disease = {r[0]: {"total": int(r[1]), "avg_weekly": round(float(r[2]), 2) if r[2] else 0} for r in dis_rows}
+            """,
+            (region_norm,),
+        )
+        by_disease = {r[0]: {"total": int(r[1])} for r in dis_rows}
     else:
         by_disease = {}
 
-    recent_rows = _db_execute(f"""
-        SELECT f.epi_year, f.epi_week, SUM(f.cases_total), f.week_start_date
-        FROM public.fact_core_weekly f
-        JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code
-        WHERE UPPER(d.region_norm) LIKE UPPER(%s) {disease_filter}
-        GROUP BY f.epi_year, f.epi_week, f.week_start_date
-        ORDER BY f.week_start_date DESC LIMIT 12
-    """, params)
-    recent = [{"year": r[0], "week": r[1], "cases": int(r[2]), "date": str(r[3])} for r in recent_rows]
-
-    seasonal_comparison = {}
-    if recent:
-        latest_epi_week = recent[0]["week"]
-        seasonal_params = list(params) 
-        seasonal_params.extend([max(1, latest_epi_week - 4), latest_epi_week])
-        seasonal_filter = f"AND f.epi_week BETWEEN %s AND %s"
-        seasonal_rows = _db_execute(f"""
-            SELECT f.epi_year, f.epi_week, SUM(f.cases_total)
-            FROM public.fact_core_weekly f
-            JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code
-            WHERE UPPER(d.region_norm) LIKE UPPER(%s) {disease_filter} {seasonal_filter}
-            GROUP BY f.epi_year, f.epi_week
-            ORDER BY f.epi_year DESC, f.epi_week
-        """, tuple(seasonal_params))
-        
-        for r in seasonal_rows:
-            if r[0] not in seasonal_comparison:
-                seasonal_comparison[r[0]] = []
-            seasonal_comparison[r[0]].append({"week": r[1], "cases": int(r[2])})
-
-    all_weeks = _db_execute(f"""
-        SELECT SUM(f.cases_total)
-        FROM public.fact_core_weekly f
-        JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code
-        WHERE UPPER(d.region_norm) LIKE UPPER(%s) {disease_filter}
-        GROUP BY f.epi_year, f.epi_week
-    """, params)
-    all_cases = [int(r[0]) for r in all_weeks if r[0] is not None]
-    stats = {}
-    if all_cases:
-        stats = {
-            "min_weekly": min(all_cases),
-            "max_weekly": max(all_cases),
-            "avg_weekly": round(statistics.mean(all_cases), 2),
-            "median_weekly": round(statistics.median(all_cases), 2),
-            "p75_weekly": _percentile(all_cases, 75),
-            "p90_weekly": _percentile(all_cases, 90)
-        }
-
-    dep_rows = _db_execute(f"""
-        SELECT f.departamento_code, SUM(f.cases_total)
-        FROM public.fact_core_weekly f
-        JOIN public.dim_departamentos d ON f.departamento_code = d.departamento_code
-        WHERE UPPER(d.region_norm) LIKE UPPER(%s) {disease_filter}
-        GROUP BY f.departamento_code ORDER BY 2 DESC LIMIT 5
-    """, params)
-
     return {
-        "total_historical": int(total_historical),
+        "total_historical": int(total_hist),
         "by_year": by_year,
         "peak_year": peak_year,
-        "peak_cases": peak_cases,
+        "peak_cases": by_year.get(peak_year, {}).get("total", 0) if peak_year else 0,
         "by_disease": by_disease,
         "recent_weeks": recent,
         "seasonal_comparison": seasonal_comparison,
-        "statistics": stats,
+        "statistics": _stats_from_weekly_values(all_cases),
         "data_from": str(min_date),
         "data_to": str(max_date),
-        "n_weeks": n_weeks,
+        "n_weeks": int(n_weeks),
         "top_deptos": [(r[0], int(r[1])) for r in dep_rows],
     }
 
@@ -518,6 +571,165 @@ def _query_seasonal_projection(
         "p90": _percentile(values, 90),
         "mean": round(statistics.mean(values), 1),
     }
+
+
+def _dept_display_name(code: str | None) -> str:
+    if not code:
+        return "ese departamento"
+    best = ""
+    for name, dept_code in DEPTO_NAME_TO_CODE.items():
+        if dept_code != code:
+            continue
+        if len(name) > len(best):
+            best = name
+    if not best:
+        return f"departamento {code}"
+    return " ".join(part.capitalize() for part in best.split())
+
+
+def _pct_change(new: float, old: float) -> float | None:
+    if old <= 0:
+        return None
+    return round((new - old) / old * 100, 1)
+
+
+def _fmt_pct(pct: float) -> str:
+    rounded = round(pct, 1)
+    if float(rounded).is_integer():
+        return str(int(rounded))
+    return str(rounded).replace(".", ",")
+
+
+def _outlook_narrative(
+    *,
+    place: str,
+    disease: str,
+    today: dt.date,
+    epi_week: int,
+    by_year: dict[int, int],
+    channel_p90: float | None = None,
+) -> str:
+    """Pronóstico de una semana: hoy vs último año en la base, un solo porcentaje."""
+    when = f"{today.day} de {_MESES_ES[today.month - 1]} de {today.year}"
+    intro = (
+        f"Hoy es {when}, semana epidemiológica {epi_week}. "
+        f"Para {disease} en {place}, miro la misma semana en la base."
+    )
+    if not by_year:
+        return intro + " No hay casos de esa semana para ese departamento y esa enfermedad."
+
+    last_year = max(by_year)
+    last_cases = int(by_year[last_year])
+    earlier = [year for year in by_year if year < last_year]
+    prev_year = max(earlier) if earlier else None
+    prev_cases = int(by_year[prev_year]) if prev_year is not None else None
+
+    if today.year in by_year and prev_year is not None and today.year == last_year:
+        observed = int(by_year[today.year])
+        base_year = prev_year
+        base_cases = int(by_year[prev_year])
+        pct = _pct_change(observed, base_cases)
+        if pct is None:
+            change = f"En {base_year} esa semana no tuvo casos, así que no calculo un porcentaje."
+        elif abs(pct) < 5:
+            change = (
+                f"Frente a {base_year} ({base_cases} casos) esta semana va casi igual "
+                f"({observed} casos, cambio menor al 5%)."
+            )
+        elif pct > 0:
+            change = (
+                f"Frente a {base_year} ({base_cases} casos) esta semana va en aumento: "
+                f"cerca de un {_fmt_pct(pct)}% más ({observed} casos)."
+            )
+        else:
+            change = (
+                f"Frente a {base_year} ({base_cases} casos) esta semana va en disminución: "
+                f"cerca de un {_fmt_pct(abs(pct))}% menos ({observed} casos)."
+            )
+        brote = _outlook_brote_clause(observed, channel_p90)
+        return f"{intro} {change} {brote}".strip()
+
+    if prev_year is None or prev_cases is None:
+        return (
+            f"{intro} El único año con datos de esa semana es {last_year}, con {last_cases} casos. "
+            "Sin un año anterior en la base no digo si va a aumentar o a disminuir."
+        )
+
+    # La base no llega a "hoy": el último año observado es la referencia,
+    # y el salto de ese año frente al anterior se proyecta un paso más.
+    projected = max(0, int(round(2 * last_cases - prev_cases)))
+    pct = _pct_change(projected, last_cases)
+    step_txt = f" En {prev_year} esa semana hubo {prev_cases} casos y en {last_year} hubo {last_cases}."
+    if pct is None or abs(pct) < 5:
+        direction = (
+            f"Frente a {last_year}, esta semana de {today.year} se mantendría casi igual "
+            f"(alrededor de {projected} casos en el departamento)."
+        )
+    elif pct > 0:
+        direction = (
+            f"Frente a {last_year} ({last_cases} casos), esta semana tendería a aumentar "
+            f"cerca de un {_fmt_pct(pct)}%, hasta unos {projected} casos en el departamento."
+        )
+    else:
+        direction = (
+            f"Frente a {last_year} ({last_cases} casos), esta semana tendería a disminuir "
+            f"cerca de un {_fmt_pct(abs(pct))}%, hasta unos {projected} casos en el departamento."
+        )
+    brote = _outlook_brote_clause(projected, channel_p90)
+    return (
+        f"{intro} La base no tiene casos de {today.year}; el último año de esa semana es {last_year}."
+        f"{step_txt} {direction} Es una proyección, no un caso confirmado. {brote}"
+    ).strip()
+
+
+def _outlook_brote_clause(cases: float, channel_p90: float | None) -> str:
+    if channel_p90 is None:
+        return "No lo marco como brote solo porque el número suba o baje."
+    if cases >= channel_p90:
+        return (
+            f"Eso sí queda sobre el canal alto de esa semana (unos {int(round(channel_p90))} casos), "
+            "así que habría señal de brote."
+        )
+    return (
+        "No lo marco como brote: un aumento o una baja no es brote si se queda "
+        "dentro de lo habitual para esa semana."
+    )
+
+
+def _query_same_week_totals(departamento_code: str, disease: str, epi_week: int) -> dict[int, int]:
+    rows = _db_execute(
+        """
+        SELECT epi_year, SUM(cases_total)
+        FROM public.fact_core_weekly
+        WHERE departamento_code = %s AND disease = %s AND epi_week = %s
+        GROUP BY epi_year
+        ORDER BY epi_year
+        """,
+        (departamento_code, disease, epi_week),
+    )
+    return {int(year): int(total or 0) for year, total in rows}
+
+
+def _week_outlook_answer(intent: dict) -> str | None:
+    """Respuesta corta para 'cómo estará X en Y hoy'. None si falta lugar o enfermedad."""
+    if not intent.get("wants_outlook"):
+        return None
+    disease = intent.get("disease")
+    depto = intent.get("departamento_code")
+    if not disease or not depto:
+        return None
+    fecha = intent.get("fecha") or resolve_epi_date(dt.date.today().year, dt.date.today().month, dt.date.today().day)
+    by_year = _query_same_week_totals(depto, disease, fecha.epi_week)
+    channel = _query_seasonal_projection(fecha.epi_week, disease, depto)
+    p90 = channel.get("p90") if channel else None
+    return _outlook_narrative(
+        place=_dept_display_name(depto),
+        disease=disease,
+        today=fecha.fecha,
+        epi_week=fecha.epi_week,
+        by_year=by_year,
+        channel_p90=p90,
+    )
 
 
 def _query_predictions(
@@ -614,6 +826,7 @@ def _detect_intent(question: str) -> dict:
     wants_climate = any(kw in lowered for kw in CLIMATE_KEYWORDS)
     wants_national = any(kw in lowered for kw in NATIONAL_KEYWORDS) and not departamento_code
     wants_region = any(kw in lowered for kw in REGION_KEYWORDS)
+    wants_mobility = any(kw in lowered for kw in MOBILITY_KEYWORDS)
 
     # Detect region name
     # NOTE: Using exact matches database dim_departamentos.region_norm values
@@ -631,7 +844,11 @@ def _detect_intent(question: str) -> dict:
             break
 
     fecha = find_date_in_text(question)
-    
+    wants_outlook = any(kw in lowered for kw in OUTLOOK_KEYWORDS)
+    if fecha is None and any(kw in lowered for kw in TODAY_HINTS):
+        today = dt.date.today()
+        fecha = resolve_epi_date(today.year, today.month, today.day)
+
     # Detect response mode
     response_mode = "current"  # Default
     
@@ -643,10 +860,11 @@ def _detect_intent(question: str) -> dict:
         response_mode = "comparison"
     else:
         # Check for forecast keywords: future, next, prediction, estimate, etc.
-        forecast_keywords = ["qué pasará", "qué pasará", "qué pasa", "pronóstico", "predicción",
+        forecast_keywords = ["qué pasará", "qué pasa", "pronóstico", "pronostico", "predicción", "prediccion",
                             "próximas semanas", "proximas semanas", "siguientes semanas",
-                            "siguiente semana", "próximo mes", "futuro", "2025", "2026", "2027"]
-        is_forecast = any(kw in lowered for kw in forecast_keywords)
+                            "siguiente semana", "próximo mes", "futuro", "estará", "estara",
+                            "2025", "2026", "2027"]
+        is_forecast = wants_outlook or any(kw in lowered for kw in forecast_keywords)
         if fecha and fecha.epi_year and (fecha.epi_year >= 2025):
             is_forecast = True
         if is_forecast:
@@ -673,9 +891,11 @@ def _detect_intent(question: str) -> dict:
         "wants_climate": wants_climate,
         "wants_national": wants_national,
         "wants_region": wants_region,
+        "wants_mobility": wants_mobility,
         "region_norm": region_norm,
         "fecha": fecha,
         "response_mode": response_mode,
+        "wants_outlook": wants_outlook,
     }
 
 
@@ -703,9 +923,117 @@ def _get_friendly_source_name(internal_name: str) -> str:
         "docs": "Documentación del proyecto",
         "movilidad_municipio": "Datos de movilidad municipal",
         "conclusiones_ia": "Interpretación sugerida por IA",
-        "casos_departamento": "Datos de casos departamentales"
+        "casos_departamento": "Datos de casos departamentales",
+        "movilidad_departamento": "Movilidad intermunicipal (departamento)",
     }
     return friendly_map.get(internal_name, internal_name)
+
+
+def _format_seasonal_snippet(seasonal_comparison: dict, max_years: int = 5) -> str:
+    if not seasonal_comparison:
+        return ""
+    years = sorted(seasonal_comparison.keys(), reverse=True)[:max_years]
+    parts = []
+    for year in years:
+        weeks = seasonal_comparison[year]
+        weeks_str = ", ".join(f"S{w['week']}:{w['cases']}" for w in sorted(weeks, key=lambda x: x["week"]))
+        parts.append(f"{year}: {weeks_str}")
+    return " Comparación estacional (últimas semanas del año, " + str(max_years) + " años): " + "; ".join(parts) + "."
+
+
+def _format_cases_summary_text(cases: dict, scope_label: str, disease: str | None) -> str:
+    """Resumen legible sin confundir filas municipio con semanas epidemiológicas."""
+    year_list = sorted(cases["by_year"].items())
+    year_str = ", ".join(
+        f"{y}: {data['total']} casos (prom {data['avg_weekly']}/sem dept, máx semanal {data['max_weekly']})"
+        for y, data in year_list
+    )
+    dis_str = ""
+    if cases.get("by_disease"):
+        dis_str = " Por enfermedad: " + ", ".join(
+            f"{d}: {data['total']}" for d, data in cases["by_disease"].items()
+        ) + "."
+
+    recent_reversed = list(reversed(cases["recent_weeks"]))
+    recent_trend = ""
+    if len(recent_reversed) >= 2:
+        first_cases = recent_reversed[0]["cases"]
+        last_cases = recent_reversed[-1]["cases"]
+        if last_cases > first_cases:
+            pct = ((last_cases - first_cases) / first_cases * 100) if first_cases > 0 else 100
+            recent_trend = f" (tendencia 12 sem: +{round(pct, 1)}%)"
+        elif last_cases < first_cases:
+            pct = ((first_cases - last_cases) / first_cases * 100) if first_cases > 0 else 100
+            recent_trend = f" (tendencia 12 sem: -{round(pct, 1)}%)"
+
+    recent_str = ", ".join(f"Sem {w['week']}/{w['year']}: {w['cases']}" for w in cases["recent_weeks"])
+    stats_str = ""
+    if cases.get("statistics"):
+        stats = cases["statistics"]
+        stats_str = (
+            f" Estadísticas (totales semanales del {scope_label}): prom {stats['avg_weekly']}/sem, "
+            f"mediana {stats['median_weekly']}, máx semanal {stats['max_weekly']}, "
+            f"p75 {stats['p75_weekly']}, p90 {stats['p90_weekly']}."
+        )
+
+    label = disease if disease else "todas las enfermedades"
+    stale_note = ""
+    if cases.get("data_to", "").startswith("2022") or cases.get("data_to", "").startswith("2021"):
+        stale_note = (
+            " Nota: el corte en base de datos no es reciente; para vigilancia activa use /alertas (pronóstico)."
+        )
+
+    return (
+        f"{scope_label} | {label} "
+        f"(corte {cases['data_from']} → {cases['data_to']}, {cases['n_weeks']} semanas epidemiológicas): "
+        f"TOTAL ACUMULADO: {cases['total_historical']} casos."
+        f"{dis_str}"
+        f" Desglose anual: {year_str}."
+        f" Año pico: {cases['peak_year']} ({cases['peak_cases']} casos)."
+        f" Últimas 12 semanas: {recent_str}{recent_trend}."
+        f"{stats_str}"
+        f"{_format_seasonal_snippet(cases.get('seasonal_comparison', {}))}"
+        f"{stale_note}"
+    )
+
+
+def _append_mobility_depto_context(
+    parts: list,
+    sources: list,
+    departamento_code: str,
+    emphasize: bool,
+) -> None:
+    mob = _query_mobility_by_depto(departamento_code)
+    if not mob:
+        hint = (
+            " Movilidad: sin flujos recientes en fact_core_weekly para este departamento "
+            "(revise el dashboard Movilidad × Enfermedad)."
+        )
+        if emphasize:
+            parts.append(hint)
+        return
+
+    top_str = ", ".join(f"{code} ({n} entradas)" for code, n in mob.get("top_entry_municipios", []))
+    base = (
+        f"Movilidad intermunicipal (sem {mob['epi_week']}/{mob['epi_year']}, corte {mob['week_start_date']}): "
+        f"~{mob['mobility_in']} llegadas y ~{mob['mobility_out']} salidas agregadas al departamento; "
+        f"índice {mob['mobility_index']}."
+    )
+    if top_str:
+        base += f" Municipios con más entradas esa semana: {top_str}."
+    if emphasize:
+        base += (
+            " Los flujos de pasajeros pueden acelerar la propagación entre municipios "
+            "(vector dengue/malaria); correlacione con el mapa OD en /dashboard."
+        )
+    parts.append(base)
+    sources.append(
+        ChatSource(
+            title=_get_friendly_source_name("movilidad_departamento"),
+            excerpt=base[:240],
+            source_type="data",
+        )
+    )
 
 
 def _search_knowledge_base(question: str, limit: int = 3) -> list[ChatSource]:
@@ -763,6 +1091,11 @@ def _document_snippets(question: str, limit: int = 3) -> list[ChatSource]:
 # ---------------------------------------------------------------------------
 
 def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
+    outlook = _week_outlook_answer(intent)
+    if outlook:
+        intent["verbatim"] = True
+        return outlook, []
+
     sources = _document_snippets(question)
     parts: list[str] = []
 
@@ -810,11 +1143,9 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
     if predictions:
         # Disclaimer about data sources (more human, no variable names)
         disclaimer = (
-            "⚠️ Nota importante: Las predicciones se basan en información de diversas fuentes verificadas, "
-            "como datos históricos de salud, clima, tendencias de búsqueda, noticias relevantes, "
-            "movilidad de personas y coberturas de vacunación. Usamos un modelo híbrido Prophet + XGBoost "
-            "para generarlas, y SHAP (SHapley Additive exPlanations) para identificar y explicar qué factores "
-            "influyen más en cada estimación. Esta es una proyección basada en datos históricos y no una certeza."
+            "Esto es una estimación, no un caso confirmado. "
+            "El número sale del historial de casos de esa semana; clima, movilidad, vacunación, "
+            "búsquedas y noticias solo acompañan cuando hay serie, y no convierten solos un cambio en brote."
         )
         parts.append(disclaimer)
         sources.append(ChatSource(
@@ -825,12 +1156,14 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
 
         for pred in predictions:
             location = pred['departamento_code'] or 'Colombia'
-            outbreak_status = "hay señales de brote" if pred['outbreak_flag'] else "no hay señales de brote"
+            cases_n = int(round(float(pred["predicted_cases"] or 0)))
+            if pred.get("outbreak_flag"):
+                outbreak_status = "sí queda por encima del canal de esa semana, así que hay señal de brote"
+            else:
+                outbreak_status = "no lo marco como brote"
             pred_text = (
-                f"Para {pred['disease']} en {location}, el modelo estima alrededor de {round(pred['predicted_cases'], 1)} casos "
-                f"para la semana epidemiológica {pred['epi_week']}/{pred['epi_year']}. "
-                f"El nivel de riesgo endémico se clasifica como {pred['endemic_risk']}, y actualmente {outbreak_status}. "
-                f"El umbral de brote establecido para este contexto es de {pred['outbreak_threshold']} casos/semana."
+                f"Para {pred['disease']} en {location}, la estimación es de unos {cases_n} casos "
+                f"en la semana {pred['epi_week']} de {pred['epi_year']}. {outbreak_status.capitalize()}."
             )
             parts.append(pred_text)
             sources.append(ChatSource(
@@ -1093,76 +1426,21 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
 
         cases = _query_cases_by_depto(depto, disease)
         if cases:
-            # Construir desglose anual detallado
-            year_list = sorted(cases["by_year"].items())
-            year_str = ", ".join(
-                f"{y}: {data['total']} casos (prom {data['avg_weekly']}/sem, máx {data['max_weekly']})"
-                for y, data in year_list
-            )
-            
-            dis_str = ""
-            if cases["by_disease"]:
-                dis_str = " Por enfermedad: " + ", ".join(
-                    f"{d}: {data['total']} (prom {data['avg_weekly']}/sem)"
-                    for d, data in cases["by_disease"].items()
-                ) + "."
-            
-            # Construir resumen de últimas semanas
-            recent_reversed = list(reversed(cases["recent_weeks"]))  # Orden cronológico
-            recent_trend = ""
-            if len(recent_reversed) >= 2:
-                first_cases = recent_reversed[0]["cases"]
-                last_cases = recent_reversed[-1]["cases"]
-                if last_cases > first_cases:
-                    pct_change = ((last_cases - first_cases) / first_cases * 100) if first_cases > 0 else 100
-                    recent_trend = f" (tendencia ascendente: +{round(pct_change, 1)}%)"
-                elif last_cases < first_cases:
-                    pct_change = ((first_cases - last_cases) / first_cases * 100) if first_cases > 0 else 100
-                    recent_trend = f" (tendencia descendente: -{round(pct_change, 1)}%)"
-                else:
-                    recent_trend = " (tendencia estable)"
-            
-            recent_str = ", ".join(
-                f"Sem {w['week']}/{w['year']}: {w['cases']}" for w in cases["recent_weeks"]
-            )
-            
-            # Añadir estadísticas
-            stats_str = ""
-            if cases.get("statistics"):
-                stats = cases["statistics"]
-                stats_str = (
-                    f" Estadísticas históricas: promedio {stats['avg_weekly']} casos/sem, "
-                    f"mediana {stats['median_weekly']}, mínimo {stats['min_weekly']}, máximo {stats['max_weekly']}. "
-                    f"Percentil 75: {stats['p75_weekly']}, percentil 90: {stats['p90_weekly']}."
-                )
-            
-            # Añadir comparación estacional
-            seasonal_str = ""
-            if cases.get("seasonal_comparison"):
-                seasonal_parts = []
-                for year, weeks in sorted(cases["seasonal_comparison"].items(), reverse=True):
-                    weeks_str = ", ".join(f"S{w['week']}:{w['cases']}" for w in sorted(weeks, key=lambda x: x["week"]))
-                    seasonal_parts.append(f"{year}: {weeks_str}")
-                if seasonal_parts:
-                    seasonal_str = f" Comparación estacional (mismas semanas): {'; '.join(seasonal_parts)}."
-            
             label = disease if disease else "todas las enfermedades"
-            parts.append(
-                f"Departamento {depto} | {label} "
-                f"(datos {cases['data_from']} → {cases['data_to']}, {cases['n_weeks']} semanas): "
-                f"TOTAL ACUMULADO: {cases['total_historical']} casos."
-                f"{dis_str}"
-                f" Desglose anual: {year_str}."
-                f" Año pico: {cases['peak_year']} ({cases['peak_cases']} casos)."
-                f" Últimas 12 semanas: {recent_str}{recent_trend}."
-                f"{stats_str}"
-                f"{seasonal_str}"
+            parts.append(_format_cases_summary_text(cases, f"Departamento {depto}", disease))
+            sources.append(
+                ChatSource(
+                    title=_get_friendly_source_name("casos_departamento"),
+                    excerpt=f"Depto {depto} | {label}: {cases['total_historical']} casos, {cases['n_weeks']} semanas epi.",
+                    source_type="data",
+                )
             )
-            sources.append(ChatSource(
-                title=_get_friendly_source_name("casos_departamento"),
-                excerpt=f"Depto {depto} | {label}: {cases['total_historical']} casos totales. Pico {cases['peak_year']}.",
-                source_type="data",
-            ))
+            _append_mobility_depto_context(
+                parts,
+                sources,
+                depto,
+                emphasize=bool(intent.get("wants_mobility")),
+            )
         elif climate:
             pass  # ya añadimos clima arriba
         else:
@@ -1375,6 +1653,18 @@ def chat(req: ChatRequest):
     # Get chat history from cache
     chat_history = chat_history_cache.get(session_id, [])
 
+    norm_q = " ".join(req.question.lower().split())
+    cached = _answer_cache.get(norm_q)
+    if cached and not chat_history and (dt.datetime.now().timestamp() - cached["ts"]) < _ANSWER_CACHE_TTL_S:
+        return ChatResponse(
+            answer=cached["answer"],
+            sources=cached["sources"],
+            disease=cached.get("disease"),
+            municipio_code=cached.get("municipio_code"),
+            departamento_code=cached.get("departamento_code"),
+            session_id=session_id,
+        )
+
     intent = _detect_intent(req.question)
 
     # Override intent with explicit request params if provided
@@ -1388,7 +1678,8 @@ def chat(req: ChatRequest):
         intent["departamento_code"] = req.departamento_code
 
     answer, sources = _build_answer(req.question, intent)
-    answer = rag.generate_answer(req.question, sources, fallback=answer, response_mode=intent["response_mode"], chat_history=chat_history)
+    if not intent.get("verbatim"):
+        answer = rag.generate_answer(req.question, sources, fallback=answer, response_mode=intent["response_mode"], chat_history=chat_history)
 
     # Save current conversation to cache
     chat_history.append({"role": "user", "content": req.question})
@@ -1396,6 +1687,14 @@ def chat(req: ChatRequest):
     # Keep only last 10 messages to avoid huge context
     chat_history = chat_history[-10:]
     chat_history_cache[session_id] = chat_history
+    _answer_cache[norm_q] = {
+        "ts": dt.datetime.now().timestamp(),
+        "answer": answer,
+        "sources": sources,
+        "disease": intent["disease"],
+        "municipio_code": intent["municipio_code"],
+        "departamento_code": intent["departamento_code"],
+    }
 
     logger.info(
         "Chat: disease=%s depto=%s muni=%s climate=%s national=%s session=%s",

@@ -1,6 +1,10 @@
 from fastapi import APIRouter, Query, HTTPException
 from app.schemas.epidemiology import MobilityODResponse, MobilityODItem, MobilityArcResponse, MobilityArcItem
-from app.services.epidemiology import get_mobility, get_mobility_od_map as load_mobility_od_map
+from app.services.epidemiology import (
+    get_mobility,
+    get_mobility_od_map as load_mobility_od_map,
+    _normalize_municipio_code,
+)
 
 router = APIRouter()
 
@@ -9,6 +13,7 @@ def get_mobility_od(
     municipio_code: str = Query(..., description="Código DANE municipio (5 dígitos)"),
     limit: int = Query(52, ge=1, le=260)
 ):
+    municipio_code = _normalize_municipio_code(municipio_code)
     df = get_mobility(municipio_code, limit=limit)
     if df.empty:
         raise HTTPException(status_code=404, detail="No mobility data found")

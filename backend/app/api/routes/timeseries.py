@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Query, HTTPException
 from app.schemas.epidemiology import TimeseriesResponse, HistoryItem, PredictionItem
 from app.services.epidemiology import get_history, VALID_DISEASES
-from app.services.prediction import predict_cases
 from app.services.model_registry import get_served_model_name
+from app.services.prediction_resolve import resolve_predictions
 
 router = APIRouter()
 
@@ -18,7 +18,9 @@ def get_timeseries(
 
     try:
         history_df = get_history(municipio_code, disease, limit=weeks_history)
-        predictions_raw = predict_cases(municipio_code, disease, weeks_ahead=weeks_ahead)
+        predictions_raw, _source = resolve_predictions(
+            municipio_code, disease, weeks_ahead=weeks_ahead
+        )
     except Exception as e:
         raise HTTPException(status_code=404, detail=str(e))
 

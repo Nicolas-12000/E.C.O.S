@@ -1,6 +1,8 @@
-# Dependencias optimizadas para producción - Solo RAG
+# Plan B: API completa + ML (Render ≥2 GB, ECOS_FULL_API=true)
 fastapi[standard]>=0.115.0
-uvicorn>=0.30.6
+uvicorn[standard]>=0.30.6
+gunicorn>=22.0.0
+grpcio>=1.66.0
 pydantic>=2.8.2
 pydantic-settings>=2.4.0
 python-dotenv>=1.0.1
@@ -13,10 +15,7 @@ numpy>=2.0.0
 # Base de datos (opcional - solo si se usa Supabase/PostgreSQL)
 psycopg[binary]>=3.2.1
 
-# Embeddings (opcional - para búsqueda semántica)
-sentence-transformers>=3.0.0
-
-# ML (opcional - para predicciones)
+# ML (pronóstico, what-if, SHAP)
 scikit-learn>=1.5.2
 xgboost>=2.1.1
 joblib>=1.4.2

@@ -273,9 +273,17 @@ def predict_cases(
         raise ValueError("weeks_ahead must be between 1 and 4")
 
     family = model_family or get_served_model_name()
+    # Vacunación, movilidad, clima, trends y RSS entran vía features exógenas en el híbrido.
+    if adjustments and family != "hybrid":
+        if load_hybrid_model() is not None:
+            family = "hybrid"
     if family == "naive":
         return predict_cases_naive(municipio_code, disease, weeks_ahead=weeks_ahead)
     if family == "ridge":
+        if adjustments:
+            raise ValueError(
+                "La simulación con ajustes requiere el modelo híbrido (entrena final_model.joblib)."
+            )
         return predict_cases_ridge(municipio_code, disease, weeks_ahead=weeks_ahead)
     return predict_cases_hybrid(
         municipio_code, disease, weeks_ahead=weeks_ahead, adjustments=adjustments

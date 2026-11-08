@@ -16,6 +16,7 @@ from app.api.routes.timeseries import router as timeseries_router
 from app.api.routes.whatif import router as whatif_router
 from app.api.routes.report import router as report_router
 from app.api.routes.anova import router as anova_router
+from app.api.routes.realtime import router as realtime_router
 
 api_router = APIRouter()
 
@@ -47,3 +48,5 @@ routers = [
 for prefix in api_prefixes:
 	for r, tag in routers:
 		api_router.include_router(r, prefix=prefix, tags=[tag])
+
+api_router.include_router(realtime_router, tags=["realtime"])

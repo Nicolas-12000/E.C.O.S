@@ -1,10 +1,14 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useState } from "react"
 import useSWR from "swr"
 import { Badge } from "@/components/ui/Badge"
 import { LottieLoader } from "@/components/ui/LottieLoader"
 import { fetcher } from "@/lib/api"
+import { useAlertsSocket } from "@/lib/realtime/useAlertsSocket"
+import { bindSharedAlertFilters, publishAlertFilters } from "@/lib/runtime/sharedAlertFilters"
+import { aggregateAlertsInWorker } from "@/lib/workers/aggregateAlerts"
+import type { AggregateResult } from "@/workers/epi-aggregate.worker"
 
 interface AlertItem {
   municipio_code: string
@@ -61,14 +65,46 @@ const riskClasses: Record<string, string> = {
 export default function AlertasPage() {
   const [disease, setDisease] = useState("")
   const [horizon, setHorizon] = useState(1)
-  const { data, error, isLoading } = useSWR<AlertsResponse>(
-    `/api/v3/alerts?${disease ? `disease=${disease}&` : ""}horizon_weeks=${horizon}&limit=50`,
-    fetcher,
-  )
+  const [agg, setAgg] = useState<AggregateResult | null>(null)
+  const swrKey = `/api/v3/alerts?${disease ? `disease=${disease}&` : ""}horizon_weeks=${horizon}&limit=50`
+  const { data, error, isLoading, mutate } = useSWR<AlertsResponse>(swrKey, fetcher)
 
   const alerts = useMemo(() => data?.alerts ?? [], [data])
   const isForecast = data?.mode === "forecast"
   const headerBadge = data?.is_stale ? "Corte antiguo" : isForecast ? "Pronóstico" : "Histórico"
+
+  const onWsTick = useCallback(
+    (tick: { total: number }) => {
+      if (tick.total !== data?.total) mutate()
+    },
+    [data?.total, mutate],
+  )
+  const { tick: wsTick, connected: wsLive } = useAlertsSocket(disease, horizon, onWsTick)
+
+  useEffect(() => {
+    return bindSharedAlertFilters((d, h) => {
+      setDisease(d)
+      setHorizon(h)
+    })
+  }, [])
+
+  useEffect(() => {
+    publishAlertFilters(disease, horizon)
+  }, [disease, horizon])
+
+  useEffect(() => {
+    if (!alerts.length) {
+      setAgg(null)
+      return
+    }
+    let cancelled = false
+    aggregateAlertsInWorker(alerts).then((res) => {
+      if (!cancelled) setAgg(res)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [alerts])
 
   return (
     <div className="container mx-auto px-4 sm:px-6 lg:px-8 py-10 max-w-6xl min-h-screen">
@@ -117,6 +153,39 @@ export default function AlertasPage() {
           )}
         </div>
       </div>
+
+      {(wsLive || agg) && (
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs text-(--color-muted)">
+          {wsLive && (
+            <Badge variant="outline" className="text-(--color-success)">
+              Tiempo real · {wsTick?.critical ?? 0} críticas · {wsTick?.high ?? 0} altas
+            </Badge>
+          )}
+          {agg && (
+            <span>
+              Resumen calculado en worker ({agg.transport}, {agg.ms} ms)
+              {typeof window !== "undefined" && window.crossOriginIsolated
+                ? " · memoria compartida activa"
+                : ""}
+            </span>
+          )}
+        </div>
+      )}
+
+      {agg && agg.byDisease.length > 0 && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+          {agg.byDisease.map((row) => (
+            <div
+              key={row.disease}
+              className="rounded-md border border-(--color-border) bg-(--color-surface) px-3 py-2"
+            >
+              <p className="text-[10px] uppercase tracking-wider text-(--color-muted)">{row.disease}</p>
+              <p className="text-lg font-semibold text-(--color-primary)">{row.count} mun</p>
+              <p className="text-xs text-(--color-secondary)">carga ~{row.load}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
         <div className="bg-(--color-surface) border border-(--color-border) rounded-md p-4">

@@ -74,6 +74,17 @@ def health():
     # Check Groq
     payload["groq"] = "ok" if settings.groq_api_key else "not_configured"
 
+    import os
+
+    payload["transport"] = {
+        "asgi_server": os.getenv("ECOS_ASGI_SERVER", "hypercorn"),
+        "client_http": "HTTP/2 or HTTP/3 at Render/Vercel TLS edge",
+        "origin_to_app": "HTTP/1.1 from Render proxy (free tier)",
+        "websocket": "/ws/alerts",
+        "grpc": "active" if settings.grpc_port > 0 else "disabled_on_render",
+        "api_surface": "lite_supabase" if settings.lite_production else "full_ml",
+    }
+
     # Check semantic index
     index_path = REPO_ROOT / "models/semantic/index.faiss"
     payload["semantic_index"] = "ok" if index_path.exists() else "missing"

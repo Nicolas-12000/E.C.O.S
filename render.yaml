@@ -1,12 +1,12 @@
 # Render configuration for ECOS Backend (RAG only - OPTIMIZED for 512MB RAM)
 services:
   - type: web
-    name: ecos-backend-rag
+    name: ecos-api
     env: python
     region: oregon  # or your preferred region
     pythonVersion: 3.12.10
     buildCommand: pip install -r ../requirements-prod-minimal.txt
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    startCommand: hypercorn app.main:app --config hypercorn.toml --bind 0.0.0.0:$PORT
     rootDir: ./backend
     envVars:
       - key: ENV
@@ -19,6 +19,12 @@ services:
         value: llama-3.3-70b-versatile
       - key: CORS_ORIGINS
         value: https://ecos-frontend.vercel.app,http://localhost:3000
+      - key: ECOS_FULL_API
+        value: "false"
+      - key: GRPC_PORT
+        value: "0"
+      - key: ECOS_ASGI_SERVER
+        value: hypercorn
       # Optional database configuration
       - key: SUPABASE_URL
         sync: false  # Set if using Supabase

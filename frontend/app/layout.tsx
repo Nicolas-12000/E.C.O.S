@@ -4,6 +4,7 @@ import "./globals.css";
 import { Navbar } from "@/components/layout/Navbar";
 import { Footer } from "@/components/layout/Footer";
 import { GlobalChatBubble } from "@/components/chat/GlobalChatBubble";
+import { RegisterServiceWorker } from "@/components/runtime/RegisterServiceWorker";
 
 const publicSans = Public_Sans({
   variable: "--font-public-sans",
@@ -57,6 +58,7 @@ export default function RootLayout({
         </main>
         <Footer />
         <GlobalChatBubble />
+        <RegisterServiceWorker />
       </body>
     </html>
   );

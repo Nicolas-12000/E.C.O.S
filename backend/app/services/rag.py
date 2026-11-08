@@ -339,7 +339,11 @@ Seguridad y Restricciones (Repetición para Énfasis)
         "--- DATOS OPERATIVOS (API) ---\n"
         f"{fallback}\n\n"
         f"--- MODO DE RESPUESTA ---\n{response_mode}\n\n"
-        "Genera una respuesta clara y detallada que analice la situación siguiendo las instrucciones del modo."
+        "Redacta como máximo dos párrafos cortos.\n"
+        "Usa solo cifras que ya estén en DATOS OPERATIVOS. No inventes otras.\n"
+        "No declares un brote si ese texto no dice que hay brote.\n"
+        "No agregues citas, enlaces, ni fuentes que no estén en los datos.\n"
+        "Si DATOS OPERATIVOS ya responde la pregunta, no lo alargues ni lo contradigas."
     )
 
     payload = {
@@ -348,8 +352,8 @@ Seguridad y Restricciones (Repetición para Énfasis)
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        "temperature": 0.2,
-        "max_tokens": 2000,
+        "temperature": 0.1,
+        "max_tokens": 450,
     }
     headers = {"Authorization": f"Bearer {settings.groq_api_key}"}
 
