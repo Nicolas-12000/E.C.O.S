@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react"
 import { Send, Bot, Loader2, MessageCircle, ChevronDown, Trash2, Sparkles, LogIn, KeyRound } from "lucide-react"
 import { Button } from "@/components/ui/Button"
-import { API_BASE } from "@/lib/api"
+import { resolveApiBase } from "@/lib/api"
 
 interface ChatSource { title: string; excerpt: string; source_type: "doc" | "data" }
 interface ChatMessage { role: "user" | "assistant"; content: string; sources?: ChatSource[] }
@@ -87,7 +87,7 @@ export function GlobalChatBubble() {
     setLoginError("")
     setLoginLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/api/v1/auth/demo-login`, {
+      const res = await fetch(`${resolveApiBase()}/api/v1/auth/demo-login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ login: loginEmail.trim(), password: loginPassword }),
@@ -112,7 +112,7 @@ export function GlobalChatBubble() {
     setMessages(p => [...p, { role: "user", content: msg }])
     setIsLoading(true)
     try {
-      const res = await fetch(`${API_BASE}/api/v1/chat`, {
+      const res = await fetch(`${resolveApiBase()}/api/v1/chat`, {
         method: "POST",
         headers: authHeaders(),
         body: JSON.stringify({ question: msg, session_id: sessionId }),
@@ -135,7 +135,7 @@ export function GlobalChatBubble() {
   const clearChat = async () => {
     try {
       if (sessionId) {
-        await fetch(`${API_BASE}/api/v1/chat/clear`, {
+        await fetch(`${resolveApiBase()}/api/v1/chat/clear`, {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify({ session_id: sessionId }),

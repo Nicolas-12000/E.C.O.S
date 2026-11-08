@@ -61,7 +61,7 @@ class Settings(BaseSettings):
             "off",
         )
         if allow or self.env == "production":
-            return r"https://.*\.vercel\.app"
+            return r"^https://.+\.vercel\.app$"
         return None
 
     model_config = SettingsConfigDict(

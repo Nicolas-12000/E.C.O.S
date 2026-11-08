@@ -3,8 +3,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.requests import Request
+from starlette.responses import Response
 
 from app.core.config import settings
+from app.core.cors import apply_cors_headers, origin_is_allowed
 from app.core.logging import setup_logging
 
 setup_logging(settings.debug)
@@ -58,6 +62,33 @@ app.add_middleware(
 )
 if _cors_regex:
     logger.info("CORS allow_origin_regex=%s", _cors_regex)
+
+
+@app.middleware("http")
+async def cors_fallback(request: Request, call_next):
+    origin = request.headers.get("origin", "")
+    if request.method == "OPTIONS" and origin and origin_is_allowed(origin):
+        return Response(
+            status_code=204,
+            headers={
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Allow-Methods": "DELETE, GET, HEAD, OPTIONS, PATCH, POST, PUT",
+                "Access-Control-Allow-Headers": request.headers.get(
+                    "access-control-request-headers", "Authorization, Content-Type"
+                ),
+                "Access-Control-Max-Age": "86400",
+                "Vary": "Origin",
+            },
+        )
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("Unhandled error %s %s", request.method, request.url.path)
+        response = JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    apply_cors_headers(request, response)
+    return response
+
 
 app.include_router(api_router)
 

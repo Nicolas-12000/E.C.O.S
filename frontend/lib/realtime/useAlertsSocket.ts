@@ -1,14 +1,14 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { API_BASE } from "@/lib/api"
+import { resolveApiBase } from "@/lib/api"
 import { parseAlertsTick, type AlertsTick } from "@/lib/validators/alertsTick"
 
 export type { AlertsTick }
 
 function wsBase(): string {
   if (typeof window === "undefined") return ""
-  const base = API_BASE.replace(/\/$/, "")
+  const base = resolveApiBase().replace(/\/$/, "")
   if (base.startsWith("http")) {
     return base.replace(/^http/, "ws")
   }
