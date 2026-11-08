@@ -2,7 +2,12 @@ from datetime import date
 
 from fastapi.testclient import TestClient
 
-from app.api.routes.chat import _detect_intent, _outlook_narrative
+from app.api.routes.chat import (
+    _detect_intent,
+    _resolve_intent,
+    _rewrite_followup_as_full_question,
+    _outlook_narrative,
+)
 from app.main import app
 
 client = TestClient(app)
@@ -42,3 +47,35 @@ def test_outlook_compares_today_with_last_db_year():
     assert intent["wants_outlook"] is True
     assert intent["fecha"] is not None
     assert intent["fecha"].fecha == date.today()
+
+
+def test_detect_intent_sika_alias():
+    intent = _detect_intent("y el sika")
+    assert intent["disease"] == "zika"
+
+
+def test_rewrite_followup_replaces_disease_keeps_place():
+    full = _rewrite_followup_as_full_question(
+        "cómo estará el dengue en nariño hoy",
+        "y el sika",
+    )
+    assert "zika" in full.lower()
+    assert "nariño" in full.lower()
+    assert "dengue" not in full.lower()
+
+
+def test_mobility_question_sets_flags():
+    intent = _detect_intent("¿Movilidad y riesgo?")
+    assert intent["wants_mobility"] is True
+
+
+def test_resolve_intent_conversational_followup():
+    history = [
+        {"role": "user", "content": "cómo estará el dengue en nariño hoy"},
+        {"role": "assistant", "content": "respuesta dengue"},
+    ]
+    intent, data_q = _resolve_intent("y el sika", history)
+    assert intent["disease"] == "zika"
+    assert intent["departamento_code"] == "52"
+    assert intent["wants_outlook"] is True
+    assert "zika" in data_q.lower() and "nariño" in data_q.lower()

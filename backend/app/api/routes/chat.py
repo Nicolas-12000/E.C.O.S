@@ -89,6 +89,7 @@ REGION_KEYWORDS = {
 MOBILITY_KEYWORDS = {
     "movilidad", "flujo", "flujos", "transporte", "pasajeros", "viajeros",
     "contag", "propag", "propagación", "od ", "origen-destino",
+    "movilidad y riesgo",
 }
 
 OUTLOOK_KEYWORDS = (
@@ -99,6 +100,130 @@ OUTLOOK_KEYWORDS = (
 )
 
 TODAY_HINTS = ("hoy", "ahora", "esta semana", "actualmente", "estará", "estara")
+
+# Coloquial / typo → clave canónica en fact_core_weekly
+DISEASE_ALIASES: dict[str, str] = {
+    "sika": "zika",
+    "chiku": "chikungunya",
+    "chik": "chikungunya",
+    "chikunguña": "chikungunya",
+}
+
+
+def _resolve_disease(lowered: str) -> str | None:
+    for d in VALID_DISEASES:
+        if d in lowered:
+            return d
+    for alias in sorted(DISEASE_ALIASES, key=len, reverse=True):
+        if alias in lowered:
+            return DISEASE_ALIASES[alias]
+    return None
+
+
+def _is_followup(question: str) -> bool:
+    q = question.lower().strip()
+    if len(q) <= 42 and _resolve_disease(q):
+        if not any(name in q for name in DEPTO_NAME_TO_CODE):
+            return True
+    return bool(
+        re.match(
+            r"^(y(\s+|$)|también|tambien|igual\s+en|qué tal|que tal|eso pero|lo mismo)\b",
+            q,
+        )
+    )
+
+
+def _intent_sparse(intent: dict) -> bool:
+    """Sin ancla geográfica ni enfermedad clara — hace falta contexto del hilo."""
+    if intent.get("wants_national") or intent.get("region_norm"):
+        return not intent.get("disease")
+    return not intent.get("disease") or (
+        not intent.get("departamento_code") and not intent.get("municipio_code")
+    )
+
+
+def _merge_intents(primary: dict, secondary: dict) -> dict:
+    out = dict(primary)
+    for key, val in secondary.items():
+        if out.get(key) in (None, False, "") and val not in (None, False, ""):
+            out[key] = val
+    if primary.get("disease"):
+        out["disease"] = primary["disease"]
+    return out
+
+
+def _rewrite_followup_as_full_question(prior_user: str, followup: str) -> str:
+    """
+    «cómo estará el dengue en nariño hoy» + «y el sika»
+    → «cómo estará el zika en nariño hoy» (mismo lugar y modo).
+    """
+    new_disease = _resolve_disease(followup.lower())
+    if not new_disease:
+        return f"{prior_user.strip()}. {followup.strip()}"
+    old_disease = _resolve_disease(prior_user.lower())
+    if old_disease:
+        return re.sub(
+            rf"\b{re.escape(old_disease)}\b",
+            new_disease,
+            prior_user,
+            count=1,
+            flags=re.IGNORECASE,
+        )
+    return f"{prior_user.strip()} (misma consulta para {new_disease}). {followup.strip()}"
+
+
+def _resolve_intent(question: str, chat_history: List[Dict[str, str]]) -> tuple[dict, str]:
+    """
+    Intención lista para SQL/RAG: combina el mensaje actual con el hilo
+    cuando el usuario escribe en forma conversacional.
+    Devuelve (intent, pregunta_para_datos).
+    """
+    intent = _detect_intent(question)
+    data_question = question
+
+    prior_users = [m["content"] for m in chat_history if m.get("role") == "user"]
+    if not prior_users:
+        return intent, data_question
+
+    prior = prior_users[-1]
+    use_thread = _is_followup(question) or (
+        _intent_sparse(intent) and len(question.strip()) < 120
+    )
+
+    if use_thread:
+        if _is_followup(question):
+            data_question = _rewrite_followup_as_full_question(prior, question)
+        else:
+            data_question = f"{prior.strip()}. {question.strip()}"
+        expanded = _detect_intent(data_question)
+        intent = _merge_intents(intent, expanded)
+
+    _enrich_intent_from_history(intent, question, chat_history)
+    return intent, data_question
+
+
+def _enrich_intent_from_history(intent: dict, question: str, chat_history: List[Dict[str, str]]) -> None:
+    """Segunda pregunta corta ('y el sika'): hereda lugar/modo del turno anterior."""
+    if not chat_history:
+        return
+    prior_user = [m["content"] for m in chat_history if m.get("role") == "user"]
+    if not prior_user:
+        return
+    prev = _detect_intent(prior_user[-1])
+    if not intent.get("departamento_code"):
+        intent["departamento_code"] = prev.get("departamento_code")
+    if not intent.get("municipio_code"):
+        intent["municipio_code"] = prev.get("municipio_code")
+    if not intent.get("fecha"):
+        intent["fecha"] = prev.get("fecha")
+    if _is_followup(question):
+        if not intent.get("wants_outlook") and prev.get("wants_outlook"):
+            intent["wants_outlook"] = True
+        if intent.get("response_mode") == "current" and prev.get("response_mode") in (
+            "forecast",
+            "historical",
+        ):
+            intent["response_mode"] = prev["response_mode"]
 
 
 # ---------------------------------------------------------------------------
@@ -800,8 +925,8 @@ def _query_predictions(
 def _detect_intent(question: str) -> dict:
     """Detecta las intenciones de la pregunta."""
     lowered = question.lower()
-    
-    disease = next((d for d in VALID_DISEASES if d in lowered), None)
+
+    disease = _resolve_disease(lowered)
     
     # Detect location
     departamento_code = None
@@ -928,6 +1053,71 @@ def _get_friendly_source_name(internal_name: str) -> str:
         "movilidad_departamento": "Movilidad intermunicipal (departamento)",
     }
     return friendly_map.get(internal_name, internal_name)
+
+
+def _format_by_disease_snippet(by_disease: dict, with_avg: bool = False) -> str:
+    if not by_disease:
+        return ""
+    parts = []
+    for d, data in by_disease.items():
+        total = data.get("total", 0)
+        if with_avg and "avg_weekly" in data:
+            parts.append(f"{d}: {total} (prom {data['avg_weekly']}/sem)")
+        else:
+            parts.append(f"{d}: {total}")
+    return " Por enfermedad: " + ", ".join(parts) + "."
+
+
+def _query_top_mobility_departments(limit: int = 5) -> list[tuple[str, float, int, int]]:
+    rows = _db_execute(
+        """
+        SELECT departamento_code,
+               ROUND(AVG(NULLIF(mobility_index, 0))::numeric, 2) AS idx,
+               SUM(COALESCE(mobility_in, 0))::bigint AS mobility_in,
+               SUM(COALESCE(mobility_out, 0))::bigint AS mobility_out
+        FROM public.fact_core_weekly
+        WHERE mobility_index IS NOT NULL AND mobility_index > 0
+        GROUP BY departamento_code
+        ORDER BY idx DESC NULLS LAST
+        LIMIT %s
+        """,
+        (limit,),
+    )
+    return [(str(r[0]), float(r[1] or 0), int(r[2] or 0), int(r[3] or 0)) for r in rows]
+
+
+def _mobility_risk_overview(disease: str | None) -> tuple[str, list[ChatSource]]:
+    """Preguntas tipo «movilidad y riesgo» sin departamento concreto."""
+    label = disease or "arbovirosis (dengue y similares)"
+    tops = _query_top_mobility_departments(5)
+    parts = [
+        "En ECOS la movilidad intermunicipal (llegadas/salidas de pasajeros en fact_core_weekly) "
+        "se usa como señal de propagación: más flujos pueden acelerar la dispersión del vector "
+        f"entre municipios, sobre todo en {label}. "
+        "No implica causalidad directa; se cruza con casos y clima en el dashboard."
+    ]
+    sources: list[ChatSource] = [
+        ChatSource(
+            title=_get_friendly_source_name("movilidad_departamento"),
+            excerpt="Índice de movilidad y flujos OD en fact_core_weekly.",
+            source_type="data",
+        )
+    ]
+    if tops:
+        dept_lines = []
+        for code, idx, mob_in, mob_out in tops[:3]:
+            name = _dept_display_name(code)
+            dept_lines.append(f"{name} (depto {code}): índice {idx}, ~{mob_in} entradas / ~{mob_out} salidas")
+        parts.append(
+            " Departamentos con mayor índice de movilidad en la base: "
+            + "; ".join(dept_lines)
+            + ". Para detalle por departamento, pregunta con nombre (ej. «movilidad y dengue en Valle»)."
+        )
+    else:
+        parts.append(
+            " No hay filas recientes de movilidad en la base curada; revisa la vista Movilidad en el dashboard."
+        )
+    return " ".join(parts), sources[:5]
 
 
 def _format_seasonal_snippet(seasonal_comparison: dict, max_years: int = 5) -> str:
@@ -1096,6 +1286,11 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
     if outlook:
         intent["verbatim"] = True
         return outlook, []
+
+    if intent.get("wants_mobility") and not intent.get("departamento_code") and not intent.get("municipio_code"):
+        text, mob_sources = _mobility_risk_overview(intent.get("disease"))
+        intent["verbatim"] = True
+        return text, mob_sources
 
     sources = _document_snippets(question)
     parts: list[str] = []
@@ -1460,10 +1655,7 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
             
             dis_str = ""
             if rdata["by_disease"]:
-                dis_str = " Por enfermedad: " + ", ".join(
-                    f"{d}: {data['total']} (prom {data['avg_weekly']}/sem)"
-                    for d, data in rdata["by_disease"].items()
-                ) + "."
+                dis_str = _format_by_disease_snippet(rdata["by_disease"], with_avg=True)
             
             recent_reversed = list(reversed(rdata["recent_weeks"])) 
             recent_trend = ""
@@ -1536,11 +1728,8 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
             
             dis_str = ""
             if nat["by_disease"]:
-                dis_str = " Por enfermedad: " + ", ".join(
-                    f"{d}: {data['total']} (prom {data['avg_weekly']}/sem)"
-                    for d, data in nat["by_disease"].items()
-                ) + "."
-            
+                dis_str = _format_by_disease_snippet(nat["by_disease"], with_avg=True)
+
             recent_reversed = list(reversed(nat["recent_weeks"])) 
             recent_trend = ""
             if len(recent_reversed) >= 2:
@@ -1609,11 +1798,8 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
         
         dis_str = ""
         if nat["by_disease"]:
-            dis_str = " Por enfermedad: " + ", ".join(
-                f"{d}: {data['total']} (prom {data['avg_weekly']}/sem)"
-                for d, data in nat["by_disease"].items()
-            ) + "."
-        
+            dis_str = _format_by_disease_snippet(nat["by_disease"], with_avg=False)
+
         parts.append(
             f"Resumen general de la base de datos ECOS: "
             f"{nat['total_historical']} casos totales en Colombia "
@@ -1666,7 +1852,7 @@ def chat(req: ChatRequest, _user: str | None = Depends(require_demo_chat_auth)):
             session_id=session_id,
         )
 
-    intent = _detect_intent(req.question)
+    intent, data_question = _resolve_intent(req.question, chat_history)
 
     # Override intent with explicit request params if provided
     if req.disease:
@@ -1678,7 +1864,7 @@ def chat(req: ChatRequest, _user: str | None = Depends(require_demo_chat_auth)):
     if req.departamento_code:
         intent["departamento_code"] = req.departamento_code
 
-    answer, sources = _build_answer(req.question, intent)
+    answer, sources = _build_answer(data_question, intent)
     if not intent.get("verbatim"):
         answer = rag.generate_answer(req.question, sources, fallback=answer, response_mode=intent["response_mode"], chat_history=chat_history)
 

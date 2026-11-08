@@ -12,7 +12,7 @@ const QUICK_ACTIONS = [
   "¿Riesgo de dengue en Nariño?",
   "Brotes en el Pacífico",
   "Malaria 2022 vs 2020",
-  "¿Movilidad y riesgo?",
+  "¿Cómo relaciona ECOS movilidad y riesgo de dengue?",
 ]
 
 const CAPABILITIES = [
@@ -117,16 +117,33 @@ export function GlobalChatBubble() {
         headers: authHeaders(),
         body: JSON.stringify({ question: msg, session_id: sessionId }),
       })
-      const data = await res.json()
+      const data = await res.json().catch(() => ({}))
       if (res.status === 401) {
         clearAuth()
         throw new Error("Sesión expirada")
       }
-      if (!res.ok) throw new Error(data.detail || "Error")
+      if (!res.ok) {
+        const detail = typeof data?.detail === "string" ? data.detail : `Error ${res.status}`
+        throw new Error(detail)
+      }
       setSessionId(data.session_id)
       setMessages(p => [...p, { role: "assistant", content: data.answer, sources: data.sources }])
-    } catch {
-      setMessages(p => [...p, { role: "assistant", content: "⚠️ No pudimos conectarnos en este momento. Intenta de nuevo en unos minutos." }])
+    } catch (err) {
+      const raw = err instanceof Error ? err.message : ""
+      let assistantMsg =
+        "⚠️ No pudimos conectarnos en este momento. Intenta de nuevo en unos minutos."
+      if (raw === "Sesión expirada") {
+        assistantMsg = "⚠️ Sesión expirada. Vuelve a entrar con la cuenta demo."
+      } else if (raw.includes("502")) {
+        assistantMsg =
+          "⚠️ El servidor tardó demasiado (502). Espera unos segundos y prueba de nuevo."
+      } else if (raw.includes("Failed to fetch") || raw.includes("NetworkError")) {
+        assistantMsg =
+          "⚠️ No hay respuesta del API (red o sesión). Confirma login demo y que el deploy esté activo."
+      } else if (raw) {
+        assistantMsg = `⚠️ ${raw}`
+      }
+      setMessages(p => [...p, { role: "assistant", content: assistantMsg }])
     } finally {
       setIsLoading(false)
     }
@@ -360,8 +377,16 @@ export function GlobalChatBubble() {
             {QUICK_ACTIONS.map((a, i) => (
               <button
                 key={i}
-                onClick={() => sendMessage(a)}
-                className="text-[11px] px-2.5 py-1.5 rounded-full transition-all hover:scale-[1.02]"
+                type="button"
+                onClick={() => {
+                  if (!chatToken) {
+                    setLoginError("Inicia sesión demo para usar el chat (tarjeta abajo).")
+                    return
+                  }
+                  sendMessage(a)
+                }}
+                disabled={!chatToken}
+                className="text-[11px] px-2.5 py-1.5 rounded-full transition-all hover:scale-[1.02] disabled:opacity-45 disabled:pointer-events-none"
                 style={{ border: "1px solid #E5E2DC", color: "#6C7278", backgroundColor: "#FFFFFF" }}
                 onMouseEnter={(e) => {
                   e.currentTarget.style.borderColor = "#B8422E"
