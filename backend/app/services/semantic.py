@@ -33,8 +33,11 @@ def available() -> bool:
     try:
         get_model()
         return True
+    except ImportError:
+        logger.debug("Semantic search skipped (sentence-transformers not installed)")
+        return False
     except Exception as e:
-        logger.error(f"Semantic service not available: {e}")
+        logger.warning("Semantic service not available: %s", e)
         return False
 
 def generate_embedding(text: str) -> List[float]:

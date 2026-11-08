@@ -12,6 +12,7 @@ Copia esto en el formulario de Render al conectar `Nicolas-12000/E.C.O.S`.
 | **Branch** | `main` |
 | **Region** | Oregon (US West) |
 | **Root Directory** | `backend` |
+| **Python version** | `3.12.10` (Dashboard → **Environment** → `PYTHON_VERSION`, o `backend/runtime.txt`) — evita el default **3.14** del builder |
 | **Build Command** | `pip install -r ../requirements-prod-minimal.txt` |
 | **Start Command** | ver abajo |
 | **Compute (free)** | 512 MB — chat + alertas + WS |
