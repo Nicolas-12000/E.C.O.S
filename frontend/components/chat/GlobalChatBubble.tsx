@@ -268,8 +268,11 @@ export function GlobalChatBubble() {
               <p className="text-[12px] mt-1" style={{ color: "#6C7278" }}>
                 <span className="font-medium" style={{ color: "#1A1C1E" }}>Contraseña:</span> {DEMO_PASSWORD}
               </p>
-              <p className="text-[10px] mt-2 italic" style={{ color: "#9CA3AF" }}>
-                Pista: vuelta en Baviera, abril 2026 — marcador del partido
+              <p className="text-[10px] mt-2 italic leading-snug" style={{ color: "#9CA3AF" }}>
+                Pista: vuelta en Baviera, abril 2026 — marcador del partido.
+                <span className="block mt-1 opacity-90">
+                  Tranquilo, Madrid: el único 4-3 aquí es la contraseña del demo — la epidemiología no pita fuera de juego.
+                </span>
               </p>
             </button>
 

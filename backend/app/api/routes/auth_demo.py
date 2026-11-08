@@ -28,7 +28,10 @@ class DemoHintResponse(BaseModel):
 @router.get("/auth/demo-hint", response_model=DemoHintResponse, summary="Pista pública (sin contraseña)")
 def demo_hint():
     return DemoHintResponse(
-        hint="Vuelta en Baviera, abril 2026 — marcador del partido",
+        hint=(
+            "Vuelta en Baviera, abril 2026 — marcador del partido. "
+            "(El Madrid solo pierde el login; los brotes los vemos con datos.)"
+        ),
         email="camavinga@allianz2026.ecos",
         username="camavinga",
     )
