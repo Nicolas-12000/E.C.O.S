@@ -27,7 +27,7 @@ Considerar el backend **completo respecto al diseño ECOS** cuando se cumple **t
 5. **Tiempo real**: WebSocket con alertas.
 6. **Calidad mínima automatizada**: tests en `backend/tests/` pasan en CI (`.github/workflows/ci.yml`).
 
-Estado frente a planes internos: `docs/PLAN_PROGRESS.md` (tabla de ítems “Done” en API, job semanal, alertas, what-if).
+Estado de entrega: `docs/REVISION_BACKEND.md` y pytest en `backend/tests/`.
 
 ## Protocolo de revisión (hacer antes de marcar “incompleto” o “mala calidad”)
 

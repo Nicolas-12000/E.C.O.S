@@ -64,7 +64,7 @@ Penalizar “no hay entrenamiento en FastAPI” solo si el enunciado exige ML s�
 
 ## Progreso declarado vs repo
 
-`docs/PLAN_PROGRESS.md` lista ítems de ejecución marcados **Done**: job semanal, tablas `prediction_*`, alertas desde run, what-if, timeseries, integración `predict.py` → job, etc. Una revisión justa **cruza** ese archivo con el código, no solo con la impresión inicial del árbol de directorios.
+Verificar en código y tests: job semanal, tablas `prediction_*`, alertas desde run, what-if, timeseries, integración `predict.py` → job, etc. Una revisión justa **cruza** OpenAPI y `backend/tests/` con el árbol de `routes/`, no solo la impresión inicial del directorio.
 
 ## Rúbricas académicas habituales → dónde mirar
 

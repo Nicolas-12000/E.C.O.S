@@ -133,29 +133,19 @@ export function GlobalChatBubble() {
   }
 
   const clearChat = async () => {
-    console.log("=== clearChat CALLED ==="); // Debug log
-    console.log("Current sessionId:", sessionId);
-    console.log("Current messages length:", messages.length);
     try {
       if (sessionId) {
-        console.log("Calling clear chat API...");
-        const res = await fetch(`${API_BASE}/api/v1/chat/clear`, {
+        await fetch(`${API_BASE}/api/v1/chat/clear`, {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify({ session_id: sessionId }),
-        });
-        console.log("Clear chat API response status:", res.status);
-        console.log("Clear chat API response ok:", res.ok);
-      } else {
-        console.log("No sessionId, skipping API call");
+        })
       }
-    } catch (e) {
-      console.error("Error clearing chat API call:", e);
+    } catch {
+      /* ignore */
     } finally {
-      console.log("Resetting local state...");
-      setMessages([WELCOME]);
-      setSessionId(null);
-      console.log("=== Local state reset complete! ===");
+      setMessages([WELCOME])
+      setSessionId(null)
     }
   }
 
@@ -227,11 +217,8 @@ export function GlobalChatBubble() {
               </button>
             )}
             {chatToken && messages.length > 1 && (
-              <button 
-                onClick={() => { 
-                  console.log("Trash button clicked!"); 
-                  clearChat(); 
-                }} 
+              <button
+                onClick={() => clearChat()} 
                 className="p-1.5 rounded-md transition-colors hover:bg-red-50" 
                 style={{ color: "#9CA3AF" }} 
                 aria-label="Limpiar"

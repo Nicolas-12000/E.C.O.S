@@ -108,3 +108,7 @@ Desktop.ini
 
 # Local execution plan (not part of the GitHub repo)
 docs/plan.md
+
+# Child-repo export scratch (use ~/exports/ecos-children)
+.tmp-ecos-children/
+.tmp-ecos-children2/

@@ -63,7 +63,6 @@ API_PATHS=(
   gunicorn.conf.py
   render.yaml
   DEPLOYMENT.md
-  DEPLOYMENT_CHECKLIST.md
   .env.example
   .gitignore
   scripts/migrate_supabase.py

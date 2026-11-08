@@ -175,7 +175,7 @@ Si revisas este proyecto con criterios de **arquitectura web** o **MLOps ligero*
 | 1 | Leer “Arquitectura” y “Decisiones de diseño” (arriba) — define batch vs request y prod free vs full. |
 | 2 | `cd backend && pytest tests -q` (mismo comando que CI en `.github/workflows/ci.yml`). |
 | 3 | Inspeccionar OpenAPI en `/docs` o `backend/app/api/router.py` / `router_prod.py`. |
-| 4 | Cruzar entregables con `docs/PLAN_PROGRESS.md` y el mapa en **`docs/REVISION_BACKEND.md`**. |
+| 4 | Cruzar entregables con el mapa en **`docs/REVISION_BACKEND.md`**. |
 | 5 | Agentes: leer también **`AGENTS.md`** (alcance, falsos negativos frecuentes). |
 
 **Backend en este diseño** = FastAPI con dominio epidemiológico completo en código (`routes/` + `services/`), pronóstico **operativo vía Supabase + job semanal**, WebSocket de alertas, chat anclado a datos, y tests automatizados. En Render free, `router_prod` omite rutas pesadas (`predict`/`scraping` en vivo) de forma documentada; eso no equivale a “sin backend de pronóstico”.

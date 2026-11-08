@@ -1,14 +1,13 @@
 # Docs
 
-Architecture notes, decisions, and user docs.
+Documentación de entrega y operación.
 
-Key docs:
-- REVISION_BACKEND.md: Backend review checklist, route map, and evidence for fair grading (humans + AI).
-- supabase-migrations.md: Migration order, prediction_runs schema, weekly job.
-- PLAN_PROGRESS.md: Completion tracker vs execution/data/polish plans.
-- api.md: API usage and base endpoints.
-- data-schema.md: Data sources and curated schema.
-- data-lineage.md: Lineage overview for curated datasets.
-- dev2-powerbi.md: Power BI quick start for the curated dataset.
-- metrics-baseline-v0.md: Baseline model metrics.
-- sprints.md: Delivery plan and status.
+| Archivo | Contenido |
+|---------|-----------|
+| [REVISION_BACKEND.md](REVISION_BACKEND.md) | Mapa de rutas, evidencia de revisión, criterios backend |
+| [api.md](api.md) | Uso de la API y prefijos |
+| [supabase-migrations.md](supabase-migrations.md) | Migraciones y job semanal de pronóstico |
+| [RENDER_SETUP.md](RENDER_SETUP.md) | Deploy Render + Vercel |
+| [CHILD_REPOS.md](CHILD_REPOS.md) | Exportar repos hijos desde el monorepo |
+| [data-schema.md](data-schema.md) / [data-lineage.md](data-lineage.md) | Esquema y linaje de datos |
+| [WEB_RUNTIME.md](WEB_RUNTIME.md) | Workers, SW y WebSocket en el front |
