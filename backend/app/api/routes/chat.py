@@ -714,8 +714,48 @@ def _dept_display_name(code: str | None) -> str:
         if len(name) > len(best):
             best = name
     if not best:
-        return f"departamento {code}"
+        return "ese departamento"
     return " ".join(part.capitalize() for part in best.split())
+
+
+def _human_count(n: int) -> str:
+    return f"{int(n):,}".replace(",", ".")
+
+
+def _sanitize_public_answer(text: str) -> str:
+    """Respuesta para el usuario: sin tablas SQL, códigos DANE ni métricas de backend."""
+    if not text:
+        return text
+
+    def _dept_sub(m: re.Match) -> str:
+        return _dept_display_name(m.group(1))
+
+    text = re.sub(r"\bfact_core_weekly\b", "los datos epidemiológicos de ECOS", text, flags=re.I)
+    text = re.sub(r"\bpublic\.\w+\b", "", text, flags=re.I)
+    text = re.sub(r"\bdim_departamentos\b", "", text, flags=re.I)
+    text = re.sub(r"\bknowledge_base\b", "documentación", text, flags=re.I)
+    text = re.sub(r"\(depto\s+\d{2}\)", "", text, flags=re.I)
+    text = re.sub(r"\bdepto\s+(\d{2})\b", _dept_sub, text, flags=re.I)
+    text = re.sub(r"\bDepartamento\s+(\d{2})\b", _dept_sub, text, flags=re.I)
+    text = re.sub(r"\bClima depto\s+(\d{2})\b", lambda m: f"Clima en {_dept_display_name(m.group(1))}", text, flags=re.I)
+    text = re.sub(r";\s*índice\s+[\d.,]+", "", text, flags=re.I)
+    text = re.sub(r"índice\s+[\d.,]+,?\s*", "movilidad reciente elevada, ", text, flags=re.I)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text
+
+
+def _sanitize_sources(sources: list[ChatSource]) -> list[ChatSource]:
+    out: list[ChatSource] = []
+    for src in sources:
+        out.append(
+            ChatSource(
+                title=src.title,
+                excerpt=_sanitize_public_answer((src.excerpt or ""))[:480],
+                source_type=src.source_type,
+                publication_date=getattr(src, "publication_date", None),
+            )
+        )
+    return out
 
 
 def _pct_change(new: float, old: float) -> float | None:
@@ -1100,31 +1140,32 @@ def _mobility_risk_overview(disease: str | None) -> tuple[str, list[ChatSource]]
     label = disease or "arbovirosis (dengue y similares)"
     tops = _query_top_mobility_departments(5)
     parts = [
-        "En ECOS la movilidad intermunicipal (llegadas/salidas de pasajeros en fact_core_weekly) "
-        "se usa como señal de propagación: más flujos pueden acelerar la dispersión del vector "
-        f"entre municipios, sobre todo en {label}. "
-        "No implica causalidad directa; se cruza con casos y clima en el dashboard."
+        "En ECOS la movilidad entre municipios (viajes de entrada y salida) se usa como señal "
+        f"de posible dispersión del vector, sobre todo en {label}. "
+        "No implica causalidad directa: se contrasta con casos y clima en el tablero de Movilidad."
     ]
     sources: list[ChatSource] = [
         ChatSource(
             title=_get_friendly_source_name("movilidad_departamento"),
-            excerpt="Índice de movilidad y flujos OD en fact_core_weekly.",
+            excerpt="Flujos intermunicipales agregados por departamento.",
             source_type="data",
         )
     ]
     if tops:
         dept_lines = []
-        for code, idx, mob_in, mob_out in tops[:3]:
+        for code, _idx, mob_in, mob_out in tops[:3]:
             name = _dept_display_name(code)
-            dept_lines.append(f"{name} (depto {code}): índice {idx}, ~{mob_in} entradas / ~{mob_out} salidas")
+            dept_lines.append(
+                f"{name} (≈{_human_count(mob_in)} llegadas y ≈{_human_count(mob_out)} salidas en el último corte)"
+            )
         parts.append(
-            " Departamentos con mayor índice de movilidad en la base: "
+            " Departamentos con mayor movilidad reciente en la base: "
             + "; ".join(dept_lines)
-            + ". Para detalle por departamento, pregunta con nombre (ej. «movilidad y dengue en Valle»)."
+            + ". Para detalle, pregunta por nombre (ej. «movilidad y dengue en Valle del Cauca»)."
         )
     else:
         parts.append(
-            " No hay filas recientes de movilidad en la base curada; revisa la vista Movilidad en el dashboard."
+            " No hay movilidad reciente en la base; revisa el módulo Movilidad del dashboard."
         )
     return " ".join(parts), sources[:5]
 
@@ -1206,25 +1247,25 @@ def _append_mobility_depto_context(
     mob = _query_mobility_by_depto(departamento_code)
     if not mob:
         hint = (
-            " Movilidad: sin flujos recientes en fact_core_weekly para este departamento "
-            "(revise el dashboard Movilidad × Enfermedad)."
+            f" Movilidad: sin flujos recientes para {_dept_display_name(departamento_code)} "
+            "(revisa Movilidad × Enfermedad en el dashboard)."
         )
         if emphasize:
             parts.append(hint)
         return
 
-    top_str = ", ".join(f"{code} ({n} entradas)" for code, n in mob.get("top_entry_municipios", []))
     base = (
-        f"Movilidad intermunicipal (sem {mob['epi_week']}/{mob['epi_year']}, corte {mob['week_start_date']}): "
-        f"~{mob['mobility_in']} llegadas y ~{mob['mobility_out']} salidas agregadas al departamento; "
-        f"índice {mob['mobility_index']}."
+        f"Movilidad intermunicipal (semana epidemiológica {mob['epi_week']}/{mob['epi_year']}): "
+        f"≈{_human_count(mob['mobility_in'])} llegadas y ≈{_human_count(mob['mobility_out'])} salidas "
+        f"agregadas en {_dept_display_name(departamento_code)}."
     )
-    if top_str:
-        base += f" Municipios con más entradas esa semana: {top_str}."
+    n_top = len(mob.get("top_entry_municipios", []))
+    if n_top:
+        base += f" Hay {n_top} municipios con más entradas esa semana (detalle en el mapa OD del dashboard)."
     if emphasize:
         base += (
             " Los flujos de pasajeros pueden acelerar la propagación entre municipios "
-            "(vector dengue/malaria); correlacione con el mapa OD en /dashboard."
+            "(dengue/malaria); puede contrastarlo con el mapa origen-destino del dashboard."
         )
     parts.append(base)
     sources.append(
@@ -1295,7 +1336,8 @@ def _region_summary_answer(intent: dict) -> tuple[str, list[ChatSource]]:
         rows = _query_region_outbreak_rows(region_norm, disease)
         if rows:
             sigs = ", ".join(
-                f"depto {r[0]} {r[1]} S{r[3]}/{r[2]} (~{int(r[4] or 0)} casos)"
+                f"{_dept_display_name(str(r[0]))} ({r[1]}, semana {r[3]}/{r[2]}, "
+                f"≈{int(r[4] or 0)} casos estimados)"
                 for r in rows[:4]
             )
             parts.append(f" Alertas de brote en predicciones recientes: {sigs}.")
@@ -1726,7 +1768,7 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
         climate = _query_climate_by_depto(depto)
         if climate and intent["wants_climate"]:
             parts.append(
-                f"Clima depto {depto}: T°prom {climate['avg_temp']}°C, "
+                f"Clima en {_dept_display_name(depto)}: T° prom {climate['avg_temp']}°C, "
                 f"precipitación prom {climate['avg_precip']} mm."
             )
             sources.append(ChatSource(
@@ -1738,7 +1780,7 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
         cases = _query_cases_by_depto(depto, disease)
         if cases:
             label = disease if disease else "todas las enfermedades"
-            parts.append(_format_cases_summary_text(cases, f"Departamento {depto}", disease))
+            parts.append(_format_cases_summary_text(cases, _dept_display_name(depto), disease))
             sources.append(
                 ChatSource(
                     title=_get_friendly_source_name("casos_departamento"),
@@ -1755,7 +1797,7 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
         elif climate:
             pass  # ya añadimos clima arriba
         else:
-            parts.append(f"No se encontraron datos para el departamento {depto}.")
+            parts.append(f"No se encontraron datos para {_dept_display_name(depto)}.")
         return " ".join(parts) or "Sin datos.", sources[:5]
 
     # ── 4. Región: resuelto al inicio de _build_answer (_region_summary_answer) ──
@@ -1810,7 +1852,7 @@ def _build_answer(question: str, intent: dict) -> tuple[str, list[ChatSource]]:
                 if seasonal_parts:
                     seasonal_str = f" Comparación estacional (mismas semanas): {'; '.join(seasonal_parts)}."
             
-            top_str = ", ".join(f"depto {d}: {c}" for d, c in nat["top_deptos"])
+            top_str = ", ".join(f"{_dept_display_name(str(d))}: {c} casos" for d, c in nat["top_deptos"])
             label = disease if disease else "todas las enfermedades"
             parts.append(
                 f"Colombia | {label} "
@@ -1926,6 +1968,9 @@ def chat(req: ChatRequest, _user: str | None = Depends(require_demo_chat_auth)):
             response_mode=intent["response_mode"],
             chat_history=chat_history,
         )
+
+    answer = _sanitize_public_answer(answer)
+    sources = _sanitize_sources(sources)
 
     # Save current conversation to cache
     chat_history.append({"role": "user", "content": req.question})

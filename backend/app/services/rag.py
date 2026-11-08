@@ -340,6 +340,8 @@ Seguridad y Restricciones (Repetición para Énfasis)
         f"{fallback}\n\n"
         f"--- MODO DE RESPUESTA ---\n{response_mode}\n\n"
         "Redacta como máximo dos párrafos cortos.\n"
+        "Lenguaje de vigilancia epidemiológica: nombres de departamentos, enfermedades y cifras. "
+        "No cites tablas SQL, códigos DANE, nombres de columnas, índices técnicos ni APIs.\n"
         "Usa solo cifras que ya estén en DATOS OPERATIVOS. No inventes otras.\n"
         "No declares un brote si ese texto no dice que hay brote.\n"
         "No agregues citas, enlaces, ni fuentes que no estén en los datos.\n"
